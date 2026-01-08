@@ -2976,64 +2976,35 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     }
 
     // =========== SERVER CONNECTION TEST ===========
-    async function testConnection() {
-        console.log('Testing connection to server...');
-        showLoading(true);
-        
-        const ports = [5000, 5500, 3000, 8000];
-        let connected = false;
-        
-        for (const port of ports) {
-            try {
-                const url = `http://127.0.0.1:${port}/health`;
-                console.log(`Trying port ${port}: ${url}`);
-                
-                const response = await fetch(url, {
-                    method: 'GET',
-                    mode: 'cors',
-                    credentials: 'include'
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    console.log(`✅ Server found on port ${port}:`, data);
-                    window.WASABI_ENDPOINT = `http://127.0.0.1:${port}`;
-                    connected = true;
-                    break;
-                }
-            } catch (err) {
-                console.log(`Port ${port} not available`);
-            }
-        }
-        
-        if (!connected) {
-            console.log('❌ No server found, trying default');
-            try {
-                const response = await fetch('http://127.0.0.1:5000/health', {
-                    method: 'GET',
-                    mode: 'cors',
-                    credentials: 'include'
-                });
-                
-                if (response.ok) {
-                    window.WASABI_ENDPOINT = 'http://127.0.0.1:5000';
-                    connected = true;
-                }
-            } catch (finalErr) {
-                console.error('Cannot connect to server:', finalErr);
-            }
-        }
-        
-        if (connected) {
-            await checkSavedSession();
-        } else {
-            showNotification('⚠️ Cannot connect to server. Make sure Flask is running on port 5000.', 'error');
-            setTimeout(() => {
-                landingPage.classList.remove('hidden');
-                showLoading(false);
-            }, 1000);
-        }
+async function testConnection() {
+    console.log("Testing server connection...");
+    showLoading(true);
+
+    // SAME ORIGIN (works on Render, custom domain, localhost)
+    const BASE_URL = window.location.origin;
+    window.API_BASE = BASE_URL;
+
+    try {
+        const response = await fetch(`${BASE_URL}/health`, {
+            method: "GET",
+            credentials: "include"
+        });
+
+        if (!response.ok) throw new Error("Health check failed");
+
+        const data = await response.json();
+        console.log("✅ Connected to server:", data);
+
+        await checkSavedSession();
+        showLoading(false);
+        return;
+
+    } catch (err) {
+        console.error("❌ Cannot connect to server:", err);
+        showNotification("⚠️ Cannot connect to server. Please try again.", "error");
+        showLoading(false);
     }
+}
 
     // =========== CHECK SAVED SESSION ===========
     async function checkSavedSession() {
