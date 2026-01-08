@@ -24,28 +24,67 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.', static_url_path='')
-app.secret_key = 'bfcinema_secret_key_2026_secure_12345'
+
+# =========== RENDER-SPECIFIC CONFIGURATIONS ===========
+# Get environment variables for Render
+RENDER = os.getenv('RENDER', 'false').lower() == 'true'
+
+# Use environment variables for secrets (set these in Render dashboard)
+app.secret_key = os.getenv('SECRET_KEY', 'bfcinema_secret_key_2026_secure_12345_prod_change_me')
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False
+
+# Configure CORS based on environment
+if RENDER:
+    # Production settings for Render
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    
+    # Get Render external URL
+    RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL', '')
+    allowed_origins = [
+        RENDER_EXTERNAL_URL,
+        'https://bfcinema.onrender.com',
+        'http://localhost:5000',
+        'http://127.0.0.1:5000',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500'
+    ]
+    allowed_origins = [origin for origin in allowed_origins if origin]  # Remove empty strings
+else:
+    # Development settings
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = False
+    
+    allowed_origins = [
+        'http://localhost:5000',
+        'http://127.0.0.1:5000',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500'
+    ]
 
 # Configure CORS properly
 CORS(app, 
-     origins=['http://localhost:5000', 'http://127.0.0.1:5000', 'http://localhost:5500', 'http://127.0.0.1:5500', 'http://localhost:3000', 'http://127.0.0.1:3000'],
+     origins=allowed_origins,
      supports_credentials=True,
-     allow_headers=['Content-Type', 'Authorization', 'Accept', 'Range'],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-     expose_headers=['Content-Type', 'Authorization', 'Content-Range', 'Accept-Ranges'])
+     allow_headers=['Content-Type', 'Authorization', 'Accept', 'Range', 'X-Requested-With'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+     expose_headers=['Content-Type', 'Authorization', 'Content-Range', 'Accept-Ranges', 'Content-Length'])
 
-# Wasabi S3 Configuration
+# =========== WASABI S3 CONFIGURATION ===========
+# Use environment variables for Wasabi credentials (set these in Render dashboard)
 WASABI_CONFIG = {
-    'access_key': 'NLXDDRMUWSYD2PW7IY8S',
-    'secret_key': 'iFnXOuPM01lqjVJ4IaWLLsGdTrUqwoJc56S742rm',
-    'bucket': 'bfcinema',
-    'region': 'eu-central-2',
-    'endpoint': 'https://s3.eu-central-2.wasabisys.com'
+    'access_key': os.getenv('WASABI_ACCESS_KEY', 'NLXDDRMUWSYD2PW7IY8S'),
+    'secret_key': os.getenv('WASABI_SECRET_KEY', 'iFnXOuPM01lqjVJ4IaWLLsGdTrUqwoJc56S742rm'),
+    'bucket': os.getenv('WASABI_BUCKET', 'bfcinema'),
+    'region': os.getenv('WASABI_REGION', 'eu-central-2'),
+    'endpoint': os.getenv('WASABI_ENDPOINT', 'https://s3.eu-central-2.wasabisys.com')
 }
 
 # Initialize S3 client
@@ -56,7 +95,8 @@ try:
         endpoint_url=WASABI_CONFIG['endpoint'],
         aws_access_key_id=WASABI_CONFIG['access_key'],
         aws_secret_access_key=WASABI_CONFIG['secret_key'],
-        region_name=WASABI_CONFIG['region']
+        region_name=WASABI_CONFIG['region'],
+        config=boto3.session.Config(signature_version='s3v4')
     )
     logger.info("✅ Wasabi S3 client initialized successfully")
     
@@ -68,23 +108,31 @@ except Exception as e:
     logger.error(f"❌ Failed to initialize S3 client: {str(e)}")
     logger.info("⚠️ Using local storage fallback for testing")
 
-# Database initialization
+# =========== DATABASE INITIALIZATION ===========
 def init_db():
     try:
-        conn = sqlite3.connect('bfcinema.db')
+        # Use Render's persistent disk path if available
+        db_path = os.getenv('DATABASE_URL', 'bfcinema.db')
+        if db_path.startswith('postgres://'):
+            logger.info("⚠️ PostgreSQL detected - using SQLite fallback for Render deployment")
+            # For Render, we'll use SQLite file path
+            db_path = '/tmp/bfcinema.db' if RENDER else 'bfcinema.db'
+        
+        conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
         # Enable foreign keys
         cursor.execute("PRAGMA foreign_keys = ON")
         
-        # Drop existing tables if they exist
-        cursor.execute('DROP TABLE IF EXISTS user_access')
-        cursor.execute('DROP TABLE IF EXISTS transactions')
-        cursor.execute('DROP TABLE IF EXISTS watch_history')
-        cursor.execute('DROP TABLE IF EXISTS downloads')
-        cursor.execute('DROP TABLE IF EXISTS activity_log')
-        cursor.execute('DROP TABLE IF EXISTS movies')
-        cursor.execute('DROP TABLE IF EXISTS users')
+        # Drop existing tables if they exist (only in development)
+        if not RENDER:
+            cursor.execute('DROP TABLE IF EXISTS user_access')
+            cursor.execute('DROP TABLE IF EXISTS transactions')
+            cursor.execute('DROP TABLE IF EXISTS watch_history')
+            cursor.execute('DROP TABLE IF EXISTS downloads')
+            cursor.execute('DROP TABLE IF EXISTS activity_log')
+            cursor.execute('DROP TABLE IF EXISTS movies')
+            cursor.execute('DROP TABLE IF EXISTS users')
         
         # Users table
         cursor.execute('''
@@ -167,7 +215,7 @@ def init_db():
         
         # Transactions table for MPesa payments
         cursor.execute('''
-            CREATE TABLE transactions (
+            CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 transaction_code TEXT UNIQUE NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -188,12 +236,12 @@ def init_db():
         ''')
         
         # Create index for faster lookups
-        cursor.execute('CREATE INDEX idx_transaction_code ON transactions(transaction_code)')
-        cursor.execute('CREATE INDEX idx_user_transactions ON transactions(user_id, created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_code ON transactions(transaction_code)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_transactions ON transactions(user_id, created_at)')
         
         # User access table
         cursor.execute('''
-            CREATE TABLE user_access (
+            CREATE TABLE IF NOT EXISTS user_access (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 movie_id INTEGER NOT NULL,
@@ -212,8 +260,8 @@ def init_db():
         admin_exists = cursor.fetchone()
         
         if not admin_exists:
-            # Create admin user
-            admin_password = 'ASGWG2@##...'
+            # Create admin user - use environment variable for admin password
+            admin_password = os.getenv('ADMIN_PASSWORD', 'ASGWG2@##...')
             password_hash = generate_password_hash(admin_password)
             cursor.execute('''
                 INSERT INTO users (name, email, phone, password_hash, is_admin)
@@ -223,54 +271,56 @@ def init_db():
         else:
             logger.info("✅ Admin user already exists")
         
-        # Add some sample movies for testing if none exist
-        cursor.execute('SELECT COUNT(*) FROM movies')
-        movie_count = cursor.fetchone()[0]
-        
-        if movie_count == 0:
-            # Sample movie data - using keys instead of URLs
-            sample_movies = [
-                {
-                    'title': 'Sample Action Movie',
-                    'description': 'An exciting action movie with thrilling sequences',
-                    'year': 2024,
-                    'duration': '120 min',
-                    'video_key': 'sample_movies/sample_action.mp4',
-                    'poster_key': 'sample_posters/sample_action.jpg',
-                    'free_preview': True,
-                    's3_url': 'https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4',
-                    'stream_url': 'https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4'
-                },
-                {
-                    'title': 'Sample Sci-Fi Adventure',
-                    'description': 'A journey through space and time',
-                    'year': 2023,
-                    'duration': '135 min',
-                    'video_key': 'sample_movies/sample_scifi.mp4',
-                    'poster_key': 'sample_posters/sample_scifi.jpg',
-                    'free_preview': False,
-                    's3_url': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-                    'stream_url': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
-                }
-            ]
+        # Add some sample movies for testing if none exist (only in development)
+        if not RENDER:
+            cursor.execute('SELECT COUNT(*) FROM movies')
+            movie_count = cursor.fetchone()[0]
             
-            for movie in sample_movies:
-                cursor.execute('''
-                    INSERT INTO movies (title, description, year, duration, video_key, poster_key, free_preview, s3_url, stream_url)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    movie['title'], movie['description'], movie['year'],
-                    movie['duration'], movie['video_key'], movie['poster_key'], movie['free_preview'],
-                    movie['s3_url'], movie['stream_url']
-                ))
-            
-            logger.info("✅ Sample movies added for testing")
+            if movie_count == 0:
+                # Sample movie data - using keys instead of URLs
+                sample_movies = [
+                    {
+                        'title': 'Sample Action Movie',
+                        'description': 'An exciting action movie with thrilling sequences',
+                        'year': 2024,
+                        'duration': '120 min',
+                        'video_key': 'sample_movies/sample_action.mp4',
+                        'poster_key': 'sample_posters/sample_action.jpg',
+                        'free_preview': True,
+                        's3_url': 'https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4',
+                        'stream_url': 'https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4'
+                    },
+                    {
+                        'title': 'Sample Sci-Fi Adventure',
+                        'description': 'A journey through space and time',
+                        'year': 2023,
+                        'duration': '135 min',
+                        'video_key': 'sample_movies/sample_scifi.mp4',
+                        'poster_key': 'sample_posters/sample_scifi.jpg',
+                        'free_preview': False,
+                        's3_url': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                        'stream_url': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+                    }
+                ]
+                
+                for movie in sample_movies:
+                    cursor.execute('''
+                        INSERT INTO movies (title, description, year, duration, video_key, poster_key, free_preview, s3_url, stream_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        movie['title'], movie['description'], movie['year'],
+                        movie['duration'], movie['video_key'], movie['poster_key'], movie['free_preview'],
+                        movie['s3_url'], movie['stream_url']
+                    ))
+                
+                logger.info("✅ Sample movies added for testing")
         
         conn.commit()
-        logger.info("✅ Database initialized successfully")
+        logger.info(f"✅ Database initialized successfully at: {db_path}")
         
     except Exception as e:
         logger.error(f"Database initialization error: {str(e)}")
+        logger.error(traceback.format_exc())
         raise e
     finally:
         if 'conn' in locals():
@@ -281,7 +331,8 @@ init_db()
 
 def get_db():
     """Get database connection"""
-    conn = sqlite3.connect('bfcinema.db')
+    db_path = '/tmp/bfcinema.db' if RENDER else 'bfcinema.db'
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -520,10 +571,12 @@ def check_transaction_code_unique(transaction_code):
 def after_request(response):
     """Add CORS headers to all responses"""
     # Add CORS headers
-    response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+    origin = request.headers.get('Origin', '')
+    if origin in allowed_origins or '*':
+        response.headers.add('Access-Control-Allow-Origin', origin)
     response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Range')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Range,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH')
     response.headers.add('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
     
     # Video-specific headers
@@ -532,6 +585,12 @@ def after_request(response):
     response.headers.add('Pragma', 'no-cache')
     response.headers.add('Expires', '0')
     
+    # Security headers for production
+    if RENDER:
+        response.headers.add('X-Content-Type-Options', 'nosniff')
+        response.headers.add('X-Frame-Options', 'SAMEORIGIN')
+        response.headers.add('X-XSS-Protection', '1; mode=block')
+    
     return response
 
 @app.before_request
@@ -539,11 +598,17 @@ def before_request():
     """Handle CORS preflight requests"""
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        origin = request.headers.get('Origin', '')
+        if origin in allowed_origins or '*':
+            response.headers.add('Access-Control-Allow-Origin', origin)
         response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Range')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,Range,X-Requested-With')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH')
         return response, 200
+    
+    # Log request in production
+    if RENDER and request.path.startswith('/api/'):
+        logger.info(f"{request.method} {request.path} - {request.remote_addr}")
 
 # =========== UPLOAD ENDPOINTS ===========
 @app.route('/api/upload-file', methods=['POST'])
@@ -564,6 +629,9 @@ def upload_file():
         
         # Save to temp directory
         temp_dir = 'temp_uploads'
+        if RENDER:
+            temp_dir = '/tmp/temp_uploads'  # Use Render's temp directory
+        
         os.makedirs(temp_dir, exist_ok=True)
         
         # Generate unique filename
@@ -605,6 +673,9 @@ def upload_movie_complete():
             return jsonify({'success': False, 'error': 'Title is required'}), 400
         
         temp_dir = 'temp_uploads'
+        if RENDER:
+            temp_dir = '/tmp/temp_uploads'
+        
         video_path = os.path.join(temp_dir, video_filename) if video_filename else None
         poster_path = os.path.join(temp_dir, poster_filename) if poster_filename else None
         
@@ -989,7 +1060,9 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'database': 'connected',
         's3_connected': s3_client is not None,
-        'version': '2.0.0'
+        'version': '2.0.0',
+        'render': RENDER,
+        'environment': 'production' if RENDER else 'development'
     })
 
 @app.route('/test-connection', methods=['GET'])
@@ -1039,7 +1112,7 @@ def login():
         
         # Admin login
         admin_email = 'BFCM2026@GMAIL.COM'
-        admin_password = 'ASGWG2@##...'
+        admin_password = os.getenv('ADMIN_PASSWORD', 'ASGWG2@##...')
         
         if email.upper() == admin_email and password == admin_password:
             session.clear()
@@ -1532,10 +1605,8 @@ def verify_payment(movie_id):
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         ''', (session['user_id'], movie_id, movie_data))
         
-        # Increment movie download count
+        # Update counters
         cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
-        
-        # Increment user's download count
         cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
         # =========== END DOWNLOADS ADDITION ===========
         
@@ -1922,6 +1993,9 @@ def upload_chunk():
         
         # Store chunk temporarily
         temp_dir = 'temp_uploads'
+        if RENDER:
+            temp_dir = '/tmp/temp_uploads'
+        
         os.makedirs(temp_dir, exist_ok=True)
         
         chunk_filename = f"{filename}_chunk_{chunk_number}"
@@ -1961,6 +2035,8 @@ def complete_upload():
             return jsonify({'success': False, 'error': 'Title and filename are required'}), 400
         
         temp_dir = 'temp_uploads'
+        if RENDER:
+            temp_dir = '/tmp/temp_uploads'
         
         # Combine movie chunks
         movie_chunks = sorted([f for f in os.listdir(temp_dir) if f.startswith(f"{filename}_chunk_")])
@@ -2047,7 +2123,10 @@ def complete_upload():
         
         # Cleanup temp files
         for f in os.listdir(temp_dir):
-            os.remove(os.path.join(temp_dir, f))
+            try:
+                os.remove(os.path.join(temp_dir, f))
+            except:
+                pass
         
         log_activity(session['user_id'], session['email'], 'upload_movie_chunked', {
             'title': title,
@@ -2687,7 +2766,7 @@ def change_password():
         
         if session['user_id'] == 'admin_001':
             # For admin, use hardcoded password
-            if current_password != 'ASGWG2@##...':
+            if current_password != os.getenv('ADMIN_PASSWORD', 'ASGWG2@##...'):
                 conn.close()
                 return jsonify({'success': False, 'error': 'Current password is incorrect'}), 400
             
@@ -2878,7 +2957,7 @@ def configure_s3_cors():
 @app.route('/api/debug/db-schema', methods=['GET'])
 def debug_db_schema():
     """Debug endpoint to check database schema"""
-    conn = sqlite3.connect('bfcinema.db')
+    conn = get_db()
     cursor = conn.cursor()
     
     # Check movies table structure
@@ -2913,9 +2992,10 @@ def debug_db_schema():
 # =========== APPLICATION START ===========
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (FIXED)")
+    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (Render Ready)")
     print("="*60)
-    print(f"📁 Database: bfcinema.db")
+    print(f"📁 Environment: {'PRODUCTION' if RENDER else 'DEVELOPMENT'}")
+    print(f"📁 Database: {'/tmp/bfcinema.db' if RENDER else 'bfcinema.db'}")
     print(f"☁️  Wasabi S3: {'✅ Connected' if s3_client else '❌ Not Connected'}")
     print(f"🔗 S3 Bucket: {WASABI_CONFIG['bucket']}")
     print(f"📍 Region: {WASABI_CONFIG['region']}")
@@ -2929,24 +3009,33 @@ if __name__ == '__main__':
             print("⚠️  Could not configure CORS automatically")
     
     print("\n🚀 Starting server...")
-    print("🌐 Server will be available at:")
-    print("   • http://localhost:5000")
-    print("   • http://127.0.0.1:5000")
-    print("\n📋 Login Credentials:")
-    print("   Admin:")
-    print("   • Email: BFCM2026@GMAIL.COM")
-    print("   • Password: ASGWG2@##...")
-    print("\n   User: Register new account")
-    print("\n🎬 Test Video Playback:")
-    print("   • Go to: http://localhost:5000/api/test-video-playback/1")
+    
+    if RENDER:
+        print("🌐 Production server on Render")
+        print("📋 Login Credentials:")
+        print("   Admin:")
+        print(f"   • Email: BFCM2026@GMAIL.COM")
+        print("   • Password: [Set in Render environment variables]")
+    else:
+        print("🌐 Development server available at:")
+        print("   • http://localhost:5000")
+        print("   • http://127.0.0.1:5000")
+        print("\n📋 Login Credentials:")
+        print("   Admin:")
+        print("   • Email: BFCM2026@GMAIL.COM")
+        print("   • Password: ASGWG2@##...")
+    
     print("\n⚡ Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
     try:
+        # Get port from environment variable (Render sets this)
+        port = int(os.getenv('PORT', 5000))
+        
         app.run(
             host='0.0.0.0',
-            port=5000,
-            debug=True,
+            port=port,
+            debug=not RENDER,  # Disable debug in production
             threaded=True,
             use_reloader=False
         )
