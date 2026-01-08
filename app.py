@@ -33,7 +33,7 @@ RENDER = os.getenv('RENDER', 'false').lower() == 'true'
 app.secret_key = os.getenv('SECRET_KEY', 'bfcinema_secret_key_2026_secure_12345_prod_change_me')
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
+app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1.2GB
 
 # Configure CORS based on environment
 if RENDER:
