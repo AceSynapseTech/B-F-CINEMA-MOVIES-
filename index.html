@@ -2273,7 +2273,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     <h4><i class="fas fa-cloud"></i> Wasabi Cloud Storage</h4>
                     <p><strong>Bucket:</strong> bfcinema</p>
                     <p><strong>Region:</strong> eu-central-2 (Frankfurt)</p>
-                    <p><strong>Flask Server Endpoint:</strong> http://127.0.0.1:5000</p>
+                    <p><strong>Flask Server Endpoint:</strong> <span id="current-server-endpoint">Loading...</span></p>
                     <p><strong>Status:</strong> <span id="storage-status">Active</span></p>
                     <button class="btn btn-info" onclick="testWasabiConnection()">
                         <i class="fas fa-plug"></i> Test Connection
@@ -2332,7 +2332,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 <div class="wasabi-info">
                     <h4><i class="fas fa-info-circle"></i> Upload Information</h4>
                     <p>Upload both movie file and poster image directly to Wasabi S3 storage via Flask server</p>
-                    <p><strong>Flask Server:</strong> Must be running on http://127.0.0.1:5000</p>
+                    <p><strong>Flask Server:</strong> <span id="current-upload-endpoint">Loading...</span></p>
                     <p><strong>Supported Video Formats:</strong> MP4, AVI, MOV, MKV, etc.</p>
                     <p><strong>Supported Image Formats:</strong> JPEG, PNG, GIF, WebP, etc.</p>
                 </div>
@@ -2511,6 +2511,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     <p><strong>Bucket:</strong> bfcinema</p>
                     <p><strong>Region:</strong> eu-central-2</p>
                     <p><strong>Endpoint:</strong> https://s3.eu-central-2.wasabisys.com</p>
+                    <p><strong>Current Server:</strong> <span id="storage-server-endpoint">Loading...</span></p>
                 </div>
             </section>
 
@@ -2624,8 +2625,9 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     </div>
 
     <script>
-    // =========== GLOBAL VARIABLES ===========
-    const WASABI_ENDPOINT = 'http://127.0.0.1:5000';
+    // =========== UPDATED: GLOBAL VARIABLES ===========
+    // Use current window origin for server endpoint
+    const WASABI_ENDPOINT = window.location.origin;
     const WASABI_REGION = 'eu-central-2';
     
     let currentUser = null;
@@ -2654,6 +2656,10 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== INITIALIZATION ===========
     document.addEventListener('DOMContentLoaded', () => {
         console.log('B/F Cinema Platform Initializing...');
+        console.log('Server Endpoint:', WASABI_ENDPOINT);
+        
+        // Update server endpoint displays
+        updateServerEndpointDisplays();
         
         // Add global error handlers
         window.addEventListener('error', function(e) {
@@ -2692,7 +2698,23 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         }, 500);
     });
 
-    // =========== ENHANCED VIDEO PLAYER FUNCTIONS ===========
+    // =========== UPDATED: Update server endpoint displays ===========
+    function updateServerEndpointDisplays() {
+        const endpointElements = [
+            'current-server-endpoint',
+            'current-upload-endpoint',
+            'storage-server-endpoint'
+        ];
+        
+        endpointElements.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.textContent = WASABI_ENDPOINT;
+            }
+        });
+    }
+
+    // =========== UPDATED: ENHANCED VIDEO PLAYER FUNCTIONS ===========
     function showVideoPlayer(movie) {
         console.log('Showing video player for movie:', movie);
         console.log('Video URL:', movie.url);
@@ -2784,9 +2806,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     function tryAlternativePlayback(movie) {
         console.log('Trying alternative playback methods...');
         
-        // Method 1: Try direct S3 URL
         const videoElement = document.getElementById('video-element');
-        const s3Url = movie.url.replace('presigned', 'direct');
         
         fetch(`${WASABI_ENDPOINT}/api/debug/movie/${movie.id}`, {
             credentials: 'include',
@@ -2949,9 +2969,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         
         if (formatBtn) {
             formatBtn.addEventListener('click', () => {
-                // This would cycle through different video formats
                 showNotification('Trying different video formats...', 'info');
-                // You would implement format switching logic here
             });
         }
         
@@ -2975,36 +2993,39 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         videoPlayer.classList.remove('active');
     }
 
-    // =========== SERVER CONNECTION TEST ===========
-async function testConnection() {
-    console.log("Testing server connection...");
-    showLoading(true);
-
-    // SAME ORIGIN (works on Render, custom domain, localhost)
-    const BASE_URL = window.location.origin;
-    window.API_BASE = BASE_URL;
-
-    try {
-        const response = await fetch(`${BASE_URL}/health`, {
-            method: "GET",
-            credentials: "include"
-        });
-
-        if (!response.ok) throw new Error("Health check failed");
-
-        const data = await response.json();
-        console.log("✅ Connected to server:", data);
-
-        await checkSavedSession();
-        showLoading(false);
-        return;
-
-    } catch (err) {
-        console.error("❌ Cannot connect to server:", err);
-        showNotification("⚠️ Cannot connect to server. Please try again.", "error");
-        showLoading(false);
+    // =========== UPDATED: SERVER CONNECTION TEST ===========
+    async function testConnection() {
+        console.log('Testing connection to server...');
+        showLoading(true);
+        
+        // Use current origin
+        const serverUrl = window.location.origin;
+        
+        try {
+            const response = await fetch(`${serverUrl}/health`, {
+                method: 'GET',
+                mode: 'cors',
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log(`✅ Server connected:`, data);
+                window.WASABI_ENDPOINT = serverUrl;
+                await checkSavedSession();
+            } else {
+                throw new Error('Server not responding');
+            }
+            
+        } catch (err) {
+            console.error('Cannot connect to server:', err);
+            showNotification('⚠️ Cannot connect to server. Please refresh the page.', 'error');
+            setTimeout(() => {
+                landingPage.classList.remove('hidden');
+                showLoading(false);
+            }, 1000);
+        }
     }
-}
 
     // =========== CHECK SAVED SESSION ===========
     async function checkSavedSession() {
@@ -3887,7 +3908,6 @@ async function testConnection() {
         
         showOnlySection('movies');
         loadUserData();
-        // UPDATED: Use the corrected loadMovies function
         loadMovies();
         showLoading(false);
     }
@@ -5091,6 +5111,7 @@ async function testConnection() {
     window.tryAlternativePlayback = tryAlternativePlayback;
 
     console.log('B/F Cinema Platform Initialization Complete!');
+    console.log('Using server endpoint:', WASABI_ENDPOINT);
     </script>
 </body>
-</html>
+                                                                   </html>
