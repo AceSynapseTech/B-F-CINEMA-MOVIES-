@@ -212,7 +212,7 @@ def init_db():
             )
         """)
         
-        # Watch history table
+        # Watch history table - FOR STATISTICS ONLY, NOT ACCESS CONTROL
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS watch_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,7 +225,7 @@ def init_db():
             )
         """)
         
-        # User access table
+        # User access table - CRITICAL: This controls permanent access
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_access (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,6 +244,7 @@ def init_db():
         # Create indexes for faster lookups
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_code ON transactions(transaction_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_transactions ON transactions(user_id, created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_access ON user_access(user_id, movie_id, is_active)')
         
         # Check if admin user exists
         cursor.execute('SELECT * FROM users WHERE email = ?', ('BFCM2026@GMAIL.COM',))
@@ -513,6 +514,39 @@ def check_transaction_code_unique(transaction_code):
     conn.close()
     return not exists
 
+# =========== ACCESS CONTROL FUNCTIONS ===========
+def has_movie_access(user_id, movie_id):
+    """Check if user has permanent access to a movie"""
+    if not user_id:
+        return False
+    
+    # Admin has access to everything
+    if user_id == 'admin_001':
+        return True
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Check if user has purchased access (PERMANENT ACCESS)
+    cursor.execute('''
+        SELECT 1 FROM user_access 
+        WHERE user_id = ? AND movie_id = ? AND is_active = 1
+        LIMIT 1
+    ''', (user_id, movie_id))
+    
+    has_access = cursor.fetchone() is not None
+    
+    # Check if movie has free preview
+    if not has_access:
+        cursor.execute('SELECT free_preview FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        if movie and movie['free_preview']:
+            has_access = True
+    
+    conn.close()
+    
+    return has_access
+
 # =========== CORS MIDDLEWARE ===========
 @app.after_request
 def after_request(response):
@@ -735,6 +769,13 @@ def upload_movie_complete():
 def stream_video_direct(movie_id):
     """Get streaming URL for a movie"""
     try:
+        # Check access FIRST
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
+        
         # Get movie details
         conn = get_db()
         cursor = conn.cursor()
@@ -774,11 +815,33 @@ def stream_video_direct(movie_id):
 def stream_movie_proxy(movie_id):
     """Proxy stream for movie - handles byte range requests"""
     try:
+        # Check access FIRST
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        # Extract movie ID from stream URL if needed
+        try:
+            movie_id_int = int(movie_id)
+        except:
+            # Try to find movie by video_key
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM movies WHERE video_key LIKE ?', (f'%{movie_id}%',))
+            movie = cursor.fetchone()
+            conn.close()
+            
+            if movie:
+                movie_id_int = movie['id']
+            else:
+                return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        
+        if not has_movie_access(session['user_id'], movie_id_int):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
+        
         # Get movie from database
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, file_type FROM movies WHERE id = ? OR video_key LIKE ?', 
-                      (movie_id, f'%{movie_id}%'))
+        cursor.execute('SELECT video_key, file_type FROM movies WHERE id = ?', (movie_id_int,))
         movie = cursor.fetchone()
         conn.close()
         
@@ -827,27 +890,9 @@ def get_movie_stream_url(movie_id):
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # Check access
-        if session.get('is_admin'):
-            pass  # Admin has access
-        else:
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT 1 FROM user_access 
-                WHERE user_id = ? AND movie_id = ? AND is_active = 1
-                LIMIT 1
-            ''', (session['user_id'], movie_id))
-            
-            if not cursor.fetchone():
-                # Check if movie has free preview
-                cursor.execute('SELECT free_preview FROM movies WHERE id = ?', (movie_id,))
-                movie = cursor.fetchone()
-                if not movie or not movie['free_preview']:
-                    conn.close()
-                    return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
-            
-            conn.close()
+        # Check access using the proper function
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
         # Get movie
         conn = get_db()
@@ -1241,6 +1286,8 @@ def check_auth():
 @app.route('/api/movies', methods=['GET'])
 def get_movies():
     try:
+        user_id = session.get('user_id')
+        
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM movies WHERE is_active=1 ORDER BY uploaded_at DESC")
@@ -1264,21 +1311,8 @@ def get_movies():
             if not poster_url:
                 poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
             
-            # Check if user has access
-            has_access = False
-            if 'user_id' in session:
-                if session.get('is_admin'):
-                    has_access = True
-                else:
-                    conn = get_db()
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT 1 FROM user_access 
-                        WHERE user_id = ? AND movie_id = ? AND is_active = 1
-                        LIMIT 1
-                    ''', (session['user_id'], movie['id']))
-                    has_access = cursor.fetchone() is not None
-                    conn.close()
+            # Check if user has access using the proper function
+            has_access = has_movie_access(user_id, movie['id'])
             
             # Get stream URL - use the stored one or generate
             stream_url = movie.get('stream_url')
@@ -1297,7 +1331,7 @@ def get_movies():
                 'views': movie.get('views', 0),
                 'downloads': movie.get('download_count', 0),
                 'uploaded_at': movie.get('uploaded_at'),
-                'has_access': has_access or bool(movie.get('free_preview', False)),
+                'has_access': has_access,
                 'free_preview': bool(movie.get('free_preview', False)),
                 'file_type': movie.get('file_type', 'video/mp4'),
                 'file_size': movie.get('file_size', 0)
@@ -1311,10 +1345,14 @@ def get_movies():
 
 @app.route('/api/movies/<int:movie_id>/watch', methods=['POST'])
 def watch_movie(movie_id):
-    """Record movie watch"""
+    """Record movie watch - THIS IS FOR STATISTICS ONLY, NOT ACCESS CONTROL"""
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        # First check if user has access
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
         conn = get_db()
         cursor = conn.cursor()
@@ -1326,7 +1364,7 @@ def watch_movie(movie_id):
         if session['user_id'] != 'admin_001':
             cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
             
-            # Add to watch history
+            # Add to watch history (FOR STATISTICS ONLY - THIS DOES NOT CONTROL ACCESS)
             cursor.execute('''
                 INSERT OR REPLACE INTO watch_history (user_id, movie_id, watched_at)
                 VALUES (?, ?, ?)
@@ -1349,6 +1387,10 @@ def download_movie(movie_id):
     try:
         if 'user_id' not in session or session['user_id'] == 'admin_001':
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        # First check if user has access
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
         conn = get_db()
         cursor = conn.cursor()
@@ -1424,6 +1466,10 @@ def get_movie_details(movie_id):
     if not video_url and movie_dict.get('s3_url'):
         video_url = movie_dict['s3_url']
     
+    # Check access
+    user_id = session.get('user_id')
+    has_access = has_movie_access(user_id, movie_id)
+    
     return jsonify(success=True, movie={
         'id': movie_dict['id'],
         'title': movie_dict['title'],
@@ -1435,7 +1481,8 @@ def get_movie_details(movie_id):
         'poster': poster_url,
         'views': movie_dict.get('views', 0),
         'downloads': movie_dict.get('download_count', 0),
-        'free_preview': bool(movie_dict.get('free_preview', False))
+        'free_preview': bool(movie_dict.get('free_preview', False)),
+        'has_access': has_access
     })
 
 # =========== PAYMENT ENDPOINTS ===========
@@ -1523,10 +1570,10 @@ def verify_payment(movie_id):
         
         transaction_id = cursor.lastrowid
         
-        # Grant access to movie
+        # Grant PERMANENT access to movie
         cursor.execute('''
-            INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
+            VALUES (?, ?, ?, 1)
         ''', (session['user_id'], movie_id, transaction_id))
         
         # =========== ADD MOVIE TO DOWNLOADS AUTOMATICALLY ===========
@@ -1770,32 +1817,13 @@ def check_movie_access(movie_id):
         if 'user_id' not in session:
             return jsonify({'success': False, 'has_access': False, 'error': 'Authentication required'}), 401
         
-        # Admin has access to everything
-        if session.get('is_admin'):
-            return jsonify({'success': True, 'has_access': True, 'is_admin': True})
+        has_access = has_movie_access(session['user_id'], movie_id)
         
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        # Check if user has purchased access
-        cursor.execute('''
-            SELECT 1 FROM user_access 
-            WHERE user_id = ? AND movie_id = ? AND is_active = 1
-            LIMIT 1
-        ''', (session['user_id'], movie_id))
-        
-        has_access = cursor.fetchone() is not None
-        
-        # Check if movie has free preview
-        if not has_access:
-            cursor.execute('SELECT free_preview FROM movies WHERE id = ?', (movie_id,))
-            movie = cursor.fetchone()
-            if movie and movie['free_preview']:
-                has_access = True
-        
-        conn.close()
-        
-        return jsonify({'success': True, 'has_access': has_access, 'is_admin': False})
+        return jsonify({
+            'success': True, 
+            'has_access': has_access, 
+            'is_admin': session.get('is_admin', False)
+        })
         
     except Exception as e:
         logger.error(f"Access check error: {str(e)}")
