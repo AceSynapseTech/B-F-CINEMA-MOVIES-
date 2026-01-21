@@ -32,7 +32,8 @@ RENDER = os.getenv('RENDER', 'false').lower() == 'true'
 # Use environment variables for secrets (set these in Render dashboard)
 app.secret_key = os.getenv('SECRET_KEY', 'bfcinema_secret_key_2026_secure_12345_prod_change_me')
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 2592000  # 720 hours
+app.config['PERMANENT_SESSION_LIFETIME'] = 31536000  # 8760 hours (1 year)
+
 app.config['MAX_CONTENT_LENGTH'] = 900 * 1024 * 1024  # 900MB
 
 # Configure CORS based on environment
