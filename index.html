@@ -1107,8 +1107,8 @@
             color: #666;
         }
         
-        /* =========== WASABI INFO =========== */
-        .wasabi-info {
+        /* =========== BACKBLAZE INFO =========== */
+        .backblaze-info {
             background: rgba(52, 152, 219, 0.1);
             border: 1px solid rgba(52, 152, 219, 0.3);
             border-radius: 10px;
@@ -1116,7 +1116,7 @@
             margin: 20px 0;
         }
         
-        .wasabi-info h4 {
+        .backblaze-info h4 {
             color: var(--info);
             margin-bottom: 10px;
             display: flex;
@@ -1124,7 +1124,7 @@
             gap: 10px;
         }
         
-        .wasabi-info p {
+        .backblaze-info p {
             margin: 5px 0;
             font-size: 0.9rem;
         }
@@ -2119,7 +2119,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 <div class="hero">
                     <div class="container">
                         <h1>Welcome to B/F Cinema</h1>
-                        <p>Your ultimate destination for streaming premium movies. All videos are securely stored on Wasabi Cloud Storage.</p>
+                        <p>Your ultimate destination for streaming premium movies. All videos are securely stored on Backblaze B2 Cloud Storage.</p>
                     </div>
                 </div>
                 
@@ -2212,7 +2212,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 <div class="main-footer-content">
                     <div class="footer-column">
                         <h3>B/F Cinema</h3>
-                        <p>Your ultimate destination for streaming premium movies. Powered by Wasabi Cloud Storage.</p>
+                        <p>Your ultimate destination for streaming premium movies. Powered by Backblaze B2 Cloud Storage.</p>
                     </div>
                     <div class="footer-column">
                         <h3>Quick Links</h3>
@@ -2225,7 +2225,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     <div class="footer-column">
                         <h3>Security</h3>
                         <ul class="footer-links">
-                            <li>Wasabi Cloud Storage</li>
+                            <li>Backblaze B2 Storage</li>
                             <li>Admin Content Only</li>
                             <li>Secure Streaming</li>
                         </ul>
@@ -2240,7 +2240,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     </div>
                 </div>
                 <div class="copyright">
-                    &copy; 2026 B/F Cinema. All rights reserved. Powered by Wasabi Cloud Storage.
+                    &copy; 2026 B/F Cinema. All rights reserved. Powered by Backblaze B2 Cloud Storage.
                 </div>
             </div>
         </footer>
@@ -2340,7 +2340,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                         <div class="stat-content">
                             <h3 id="total-movies-admin">0</h3>
                             <p>Total Movies</p>
-                            <small><i class="fas fa-cloud"></i> Stored on Wasabi</small>
+                            <small><i class="fas fa-cloud"></i> Stored on Backblaze</small>
                         </div>
                     </div>
                     
@@ -2366,14 +2366,15 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     </div>
                 </div>
                 
-                <!-- Wasabi Storage Info -->
-                <div class="wasabi-info">
-                    <h4><i class="fas fa-cloud"></i> Wasabi Cloud Storage</h4>
+                <!-- Backblaze Storage Info -->
+                <div class="backblaze-info">
+                    <h4><i class="fas fa-cloud"></i> Backblaze B2 Cloud Storage</h4>
                     <p><strong>Bucket:</strong> bfcinema</p>
-                    <p><strong>Region:</strong> eu-central-2 (Frankfurt)</p>
-                    <p><strong>Flask Server Endpoint:</strong> <span id="current-server-endpoint">Loading...</span></p>
+                    <p><strong>Region:</strong> EU Central (Amsterdam)</p>
+                    <p><strong>Endpoint:</strong> s3.eu-central-003.backblazeb2.com</p>
+                    <p><strong>Key ID:</strong> 0033811f85f980c0000000001</p>
                     <p><strong>Status:</strong> <span id="storage-status">Active</span></p>
-                    <button class="btn btn-info" onclick="testWasabiConnection()">
+                    <button class="btn btn-info" onclick="testBackblazeConnection()">
                         <i class="fas fa-plug"></i> Test Connection
                     </button>
                 </div>
@@ -2399,7 +2400,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             <!-- Movie Management Section -->
             <section id="movie-management-section" class="content-section">
                 <h2 class="section-title">Movie Management</h2>
-                <p class="admin-subtitle" style="color: var(--text-gray); margin-bottom: 30px;">Edit or delete movies stored on Wasabi</p>
+                <p class="admin-subtitle" style="color: var(--text-gray); margin-bottom: 30px;">Edit or delete movies stored on Backblaze</p>
                 
                 <div class="table-responsive">
                     <table class="admin-table" id="admin-movies-table">
@@ -2422,15 +2423,17 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 </div>
             </section>
 
-            <!-- UPDATED: Uploads Section with Queue System -->
+            <!-- UPDATED: Uploads Section with Backblaze -->
             <section id="uploads-section" class="content-section">
-                <h2 class="section-title">Upload Movie to Wasabi S3</h2>
-                <p class="admin-subtitle" style="color: var(--text-gray); margin-bottom: 30px;">Upload movies directly to Wasabi Cloud Storage with poster image</p>
+                <h2 class="section-title">Upload Movie to Backblaze B2</h2>
+                <p class="admin-subtitle" style="color: var(--text-gray); margin-bottom: 30px;">Upload movies directly to Backblaze B2 Cloud Storage with poster image</p>
                 
-                <div class="wasabi-info">
+                <div class="backblaze-info">
                     <h4><i class="fas fa-info-circle"></i> Upload Information</h4>
-                    <p>Upload both movie file and poster image directly to Wasabi S3 storage via Flask server</p>
-                    <p><strong>Flask Server:</strong> <span id="current-upload-endpoint">Loading...</span></p>
+                    <p>Upload both movie file and poster image directly to Backblaze B2 storage</p>
+                    <p><strong>Endpoint:</strong> s3.eu-central-003.backblazeb2.com</p>
+                    <p><strong>Bucket:</strong> bfcinema</p>
+                    <p><strong>Key ID:</strong> 0033811f85f980c0000000001</p>
                     <p><strong>Supported Video Formats:</strong> MP4, AVI, MOV, MKV, etc.</p>
                     <p><strong>Supported Image Formats:</strong> JPEG, PNG, GIF, WebP, etc.</p>
                 </div>
@@ -2495,7 +2498,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                             </div>
                             
                             <button type="submit" class="btn btn-primary" style="width: 200px; margin-top: 20px;">
-                                <i class="fas fa-upload"></i> Upload Movie
+                                <i class="fas fa-upload"></i> Upload to Backblaze
                             </button>
                         </form>
                     </div>
@@ -2569,27 +2572,27 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
 
             <!-- Storage Section -->
             <section id="storage-section" class="content-section">
-                <h2 class="section-title">Wasabi Storage</h2>
+                <h2 class="section-title">Backblaze B2 Storage</h2>
                 <p class="admin-subtitle" style="color: var(--text-gray); margin-bottom: 30px;">Manage cloud storage and settings</p>
                 
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-content">
                             <h3 id="movies-count-admin">0</h3>
-                            <p>Movies on Wasabi</p>
+                            <p>Movies on Backblaze</p>
                         </div>
                     </div>
                     
                     <div class="stat-card">
                         <div class="stat-content">
-                            <h3 id="storage-total-admin">1 TB</h3>
+                            <h3 id="storage-total-admin">10 GB</h3>
                             <p>Total Storage</p>
                         </div>
                     </div>
                     
                     <div class="stat-card">
                         <div class="stat-content">
-                            <h3 id="storage-free-admin">1 TB</h3>
+                            <h3 id="storage-free-admin">10 GB</h3>
                             <p>Available Storage</p>
                         </div>
                     </div>
@@ -2602,14 +2605,15 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     </div>
                 </div>
                 
-                <div class="wasabi-info">
-                    <h4><i class="fas fa-cog"></i> Wasabi Configuration</h4>
-                    <p><strong>Access Key:</strong> NLXDDRMUWSYD2PW7IY8S</p>
-                    <p><strong>Secret Key:</strong> ********************</p>
+                <div class="backblaze-info">
+                    <h4><i class="fas fa-cog"></i> Backblaze Configuration</h4>
+                    <p><strong>Key ID:</strong> 0033811f85f980c0000000001</p>
+                    <p><strong>Application Key:</strong> K003ROCPq4vNmTQXZx9h4fZ0ozcFzVM</p>
                     <p><strong>Bucket:</strong> bfcinema</p>
-                    <p><strong>Region:</strong> eu-central-2</p>
-                    <p><strong>Endpoint:</strong> https://s3.eu-central-2.wasabisys.com</p>
-                    <p><strong>Current Server:</strong> <span id="storage-server-endpoint">Loading...</span></p>
+                    <p><strong>Endpoint:</strong> s3.eu-central-003.backblazeb2.com</p>
+                    <p><strong>Region:</strong> EU Central (Amsterdam)</p>
+                    <p><strong>Storage Class:</strong> Standard</p>
+                    <p><strong>Cost:</strong> $0.005/GB per month</p>
                 </div>
             </section>
 
@@ -2704,10 +2708,17 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 
     <script>
-    // =========== UPDATED: GLOBAL VARIABLES ===========
-    // Use current window origin for server endpoint
-    const WASABI_ENDPOINT = window.location.origin;
-    const WASABI_REGION = 'eu-central-2';
+    // =========== UPDATED: GLOBAL VARIABLES FOR BACKBLAZE ===========
+    // Backblaze B2 Configuration
+    const BACKBLAZE_CONFIG = {
+        endpoint: 'https://s3.eu-central-003.backblazeb2.com',
+        bucket: 'bfcinema',
+        keyId: '0033811f85f980c0000000001',
+        applicationKey: 'K003ROCPq4vNmTQXZx9h4fZ0ozcFzVM'
+    };
+    
+    // Server endpoint
+    const SERVER_ENDPOINT = window.location.origin;
     
     let currentUser = null;
     let isAdmin = false;
@@ -2736,7 +2747,8 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== INITIALIZATION ===========
     document.addEventListener('DOMContentLoaded', () => {
         console.log('B/F Cinema Platform Initializing...');
-        console.log('Server Endpoint:', WASABI_ENDPOINT);
+        console.log('Server Endpoint:', SERVER_ENDPOINT);
+        console.log('Backblaze Config:', BACKBLAZE_CONFIG);
         
         // Update server endpoint displays
         updateServerEndpointDisplays();
@@ -2829,16 +2841,25 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
 
     // =========== UPDATED: Update server endpoint displays ===========
     function updateServerEndpointDisplays() {
-        const endpointElements = [
+        // Update Backblaze endpoint
+        const endpointElements = document.querySelectorAll('.backblaze-info p strong');
+        endpointElements.forEach(el => {
+            if (el.textContent.includes('Endpoint:')) {
+                el.parentElement.innerHTML = `<strong>Endpoint:</strong> ${BACKBLAZE_CONFIG.endpoint}`;
+            }
+        });
+        
+        // Update server endpoint
+        const serverElements = [
             'current-server-endpoint',
             'current-upload-endpoint',
             'storage-server-endpoint'
         ];
         
-        endpointElements.forEach(id => {
+        serverElements.forEach(id => {
             const element = document.getElementById(id);
             if (element) {
-                element.textContent = WASABI_ENDPOINT;
+                element.textContent = SERVER_ENDPOINT;
             }
         });
     }
@@ -2859,7 +2880,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 }
                 
                 // Record view on server
-                fetch(`${WASABI_ENDPOINT}/api/movies/${movie.id}/watch`, {
+                fetch(`${SERVER_ENDPOINT}/api/movies/${movie.id}/watch`, {
                     method: 'POST',
                     credentials: 'include',
                     mode: 'cors'
@@ -2948,11 +2969,8 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         console.log('Testing connection to server...');
         showLoading(true);
         
-        // Use current origin
-        const serverUrl = window.location.origin;
-        
         try {
-            const response = await fetch(`${serverUrl}/health`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/health`, {
                 method: 'GET',
                 mode: 'cors',
                 credentials: 'include'
@@ -2961,7 +2979,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             if (response.ok) {
                 const data = await response.json();
                 console.log(`✅ Server connected:`, data);
-                window.WASABI_ENDPOINT = serverUrl;
                 await checkSavedSession();
             } else {
                 throw new Error('Server not responding');
@@ -2981,7 +2998,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     async function checkSavedSession() {
         try {
             console.log('Checking saved session...');
-            const response = await fetch(`${WASABI_ENDPOINT}/api/check-auth`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/check-auth`, {
                 method: 'GET',
                 credentials: 'include',
                 mode: 'cors'
@@ -3226,9 +3243,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         console.log('Event listeners setup complete');
     }
 
-    // Rest of your JavaScript functions remain the same...
-    // (All other functions like setupFileUploadHandlers, handleUserLogin, etc. remain unchanged)
-
     // =========== UI FUNCTIONS ===========
     function showModal(modal) {
         modal.classList.add('active');
@@ -3414,22 +3428,9 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         console.log('Plyr player controls setup complete');
     }
 
-    // All other existing functions remain the same...
-    // (All functions from the original code, except the video player related ones that we updated)
-
-    // Rest of your original JavaScript code continues here...
-    // Note: I've truncated the rest for brevity, but you should include all your original
-    // JavaScript functions like setupFileUploadHandlers, handleUserLogin, etc.
-    // The key changes are only in the video player and responsive CSS parts.
-    
-    // IMPORTANT: Copy all your existing JavaScript functions from the original file
-    // starting from line where setupFileUploadHandlers() is defined, but exclude
-    // the old showVideoPlayer, hideVideoPlayer, and setupVideoPlaybackControls functions
-    // since we've replaced them with the new Plyr-based versions above.
-
     // =========== FILE UPLOAD HANDLERS ===========
     function setupFileUploadHandlers() {
-        console.log('Setting up file upload handlers...');
+        console.log('Setting up file upload handlers for Backblaze...');
         
         // Poster image upload
         const adminPosterDropArea = document.getElementById('admin-poster-drop-area');
@@ -3579,14 +3580,15 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         }
     }
 
-    // =========== SIMPLE UPLOAD FUNCTION ===========
-    async function uploadFile(file, fileType) {
+    // =========== UPDATED: BACKBLAZE UPLOAD FUNCTIONS ===========
+    async function uploadFileToBackblaze(file, fileType) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('fileType', fileType);
+        formData.append('storage_type', 'backblaze');
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/upload-file`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/upload-file`, {
                 method: 'POST',
                 body: formData,
                 credentials: 'include',
@@ -3603,7 +3605,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== COMPLETE MOVIE UPLOAD ===========
     async function completeMovieUpload(uploadItem) {
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/upload-movie-complete`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/upload-movie-complete`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -3614,7 +3616,8 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     year: uploadItem.year,
                     duration: uploadItem.duration,
                     video_filename: uploadItem.videoFilename,
-                    poster_filename: uploadItem.posterFilename
+                    poster_filename: uploadItem.posterFilename,
+                    storage_type: 'backblaze'
                 }),
                 credentials: 'include',
                 mode: 'cors'
@@ -3646,24 +3649,25 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         const percentageText = document.getElementById('upload-percentage');
         
         if (progressContainer) progressContainer.style.display = 'block';
-        if (statusText) statusText.textContent = 'Starting upload...';
+        if (statusText) statusText.textContent = 'Starting upload to Backblaze...';
         if (percentageText) percentageText.textContent = '0%';
         
         try {
             // Upload poster
-            if (statusText) statusText.textContent = 'Uploading poster...';
-            const posterResult = await uploadFile(currentUpload.posterFile, 'poster');
+            if (statusText) statusText.textContent = 'Uploading poster to Backblaze...';
+            const posterResult = await uploadFileToBackblaze(currentUpload.posterFile, 'poster');
             currentUpload.posterFilename = posterResult.filename;
             currentUpload.progress = 30;
             updateUploadProgress();
             
             // Upload video with progress tracking
-            if (statusText) statusText.textContent = 'Uploading video...';
+            if (statusText) statusText.textContent = 'Uploading video to Backblaze...';
             
             // Create FormData for video
             const videoFormData = new FormData();
             videoFormData.append('file', currentUpload.videoFile);
             videoFormData.append('fileType', 'movie');
+            videoFormData.append('storage_type', 'backblaze');
             
             // Use XMLHttpRequest for progress tracking
             const videoResult = await uploadFileWithProgress(
@@ -3685,8 +3689,8 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             
             if (completeResult.success) {
                 currentUpload.status = 'completed';
-                if (statusText) statusText.textContent = 'Upload completed!';
-                showNotification(`Movie "${currentUpload.title}" uploaded successfully!`, 'success');
+                if (statusText) statusText.textContent = 'Upload completed to Backblaze!';
+                showNotification(`Movie "${currentUpload.title}" uploaded successfully to Backblaze!`, 'success');
                 
                 // Refresh admin movies list
                 if (isAdmin) {
@@ -3698,13 +3702,13 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             }
             
         } catch (error) {
-            console.error('Upload failed:', error);
+            console.error('Backblaze upload failed:', error);
             currentUpload.status = 'failed';
             if (statusText) {
                 statusText.textContent = `Failed: ${error.message}`;
                 statusText.style.color = 'var(--danger)';
             }
-            showNotification(`Upload failed: ${error.message}`, 'error');
+            showNotification(`Backblaze upload failed: ${error.message}`, 'error');
         } finally {
             // Remove from queue after a delay
             setTimeout(() => {
@@ -3738,8 +3742,9 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             
             formData.append('file', file);
             formData.append('fileType', fileType);
+            formData.append('storage_type', 'backblaze');
             
-            xhr.open('POST', `${WASABI_ENDPOINT}/api/upload-file`);
+            xhr.open('POST', `${SERVER_ENDPOINT}/api/upload-file`);
             xhr.withCredentials = true;
             
             xhr.upload.addEventListener('progress', (event) => {
@@ -3895,7 +3900,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         
         try {
             console.log('Attempting login for:', email);
-            const response = await fetch(`${WASABI_ENDPOINT}/api/login`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/login`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3986,7 +3991,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
             console.log('Registering user:', newUser);
             
             // Send to server endpoint
-            const response = await fetch(`${WASABI_ENDPOINT}/save-user`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/save-user`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -4023,7 +4028,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            await fetch(`${WASABI_ENDPOINT}/api/logout`, {
+            await fetch(`${SERVER_ENDPOINT}/api/logout`, {
                 method: 'POST',
                 credentials: 'include',
                 mode: 'cors'
@@ -4105,7 +4110,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/movies/${movieId}/verify-payment`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/movies/${movieId}/verify-payment`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -4266,7 +4271,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
 
     // =========== UPDATED LOAD MOVIES FUNCTION ===========
     async function loadMovies() {
-        console.log('Loading movies...');
+        console.log('Loading movies from Backblaze...');
         const container = document.getElementById('movies-container');
         const noMovies = document.getElementById('no-movies');
         
@@ -4275,7 +4280,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/movies`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/movies`, {
                 method: 'GET',
                 credentials: 'include',
                 mode: 'cors'
@@ -4345,7 +4350,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
 
     async function checkMovieAccess(movieId) {
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/movies/${movieId}/check-access`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/movies/${movieId}/check-access`, {
                 method: 'GET',
                 credentials: 'include',
                 mode: 'cors'
@@ -4367,7 +4372,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/movies`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/movies`, {
                 method: 'GET',
                 credentials: 'include',
                 mode: 'cors'
@@ -4394,7 +4399,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                         <td>${movie.year || 'N/A'}</td>
                         <td>${movie.views || 0}</td>
                         <td>${movie.downloads || 0}</td>
-                        <td><span class="badge">${movie.storage || 'wasabi'}</span></td>
+                        <td><span class="badge">${movie.storage || 'backblaze'}</span></td>
                         <td>
                             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                 <button class="btn btn-danger btn-sm delete-movie-btn" data-id="${movie.id}">
@@ -4448,7 +4453,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/movies/${movieId}`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/movies/${movieId}`, {
                 method: 'DELETE',
                 credentials: 'include',
                 mode: 'cors'
@@ -4486,7 +4491,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/movies/${movieId}/download`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/movies/${movieId}/download`, {
                 method: 'POST',
                 credentials: 'include',
                 mode: 'cors'
@@ -4546,7 +4551,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         if (!currentUser || isAdmin) return;
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/user/profile`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/user/profile`, {
                 method: 'GET',
                 credentials: 'include',
                 mode: 'cors'
@@ -4578,7 +4583,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/user/downloads`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/user/downloads`, {
                 credentials: 'include',
                 mode: 'cors'
             });
@@ -4658,7 +4663,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/user/change-password`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/user/change-password`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -4692,7 +4697,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/stats`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/stats`, {
                 credentials: 'include',
                 mode: 'cors'
             });
@@ -4756,7 +4761,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/users`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users`, {
                 credentials: 'include',
                 mode: 'cors'
             });
@@ -4825,17 +4830,17 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         
         // Get movie count from loaded movies
         if (moviesCount) moviesCount.textContent = movies.length;
-        if (storageTotal) storageTotal.textContent = '1 TB';
+        if (storageTotal) storageTotal.textContent = '10 GB';
         
         if (storageFree) {
-            const usedGB = movies.length * 1.5;
-            const freeGB = 1024 - usedGB;
-            storageFree.textContent = `${freeGB.toFixed(0)} GB`;
+            const usedGB = movies.length * 0.5; // Average 500MB per movie
+            const freeGB = 10 - usedGB;
+            storageFree.textContent = `${freeGB.toFixed(1)} GB`;
         }
         
         if (storageCost) {
-            const usedGB = movies.length * 1.5;
-            const monthlyCost = (usedGB / 1024) * 5.99;
+            const usedGB = movies.length * 0.5;
+            const monthlyCost = usedGB * 0.005; // $0.005 per GB
             storageCost.textContent = `$${monthlyCost.toFixed(2)}`;
         }
     }
@@ -4848,7 +4853,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/users/${userId}`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users/${userId}`, {
                 method: 'DELETE',
                 credentials: 'include',
                 mode: 'cors'
@@ -4885,7 +4890,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/transactions`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions`, {
                 credentials: 'include',
                 mode: 'cors'
             });
@@ -4979,7 +4984,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(true);
         
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/api/admin/transactions/${transactionId}`, {
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions/${transactionId}`, {
                 credentials: 'include',
                 mode: 'cors'
             });
@@ -5046,11 +5051,11 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         }
     }
 
-    // =========== WASABI FUNCTIONS ===========
-    async function testWasabiConnection() {
+    // =========== BACKBLAZE CONNECTION TEST ===========
+    async function testBackblazeConnection() {
         showLoading(true);
         try {
-            const response = await fetch(`${WASABI_ENDPOINT}/test-connection`);
+            const response = await fetch(`${SERVER_ENDPOINT}/test-backblaze-connection`);
             const data = await response.json();
             const statusEl = document.getElementById('storage-status');
             
@@ -5059,7 +5064,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     statusEl.textContent = 'Active';
                     statusEl.style.color = '#2ecc71';
                 }
-                showNotification('Wasabi connection successful!', 'success');
+                showNotification('Backblaze B2 connection successful!', 'success');
             } else {
                 throw new Error(data.error || 'Connection failed');
             }
@@ -5069,7 +5074,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 statusEl.textContent = 'Inactive';
                 statusEl.style.color = '#e74c3c';
             }
-            showNotification(`Wasabi connection failed: ${err.message}`, 'error');
+            showNotification(`Backblaze connection failed: ${err.message}`, 'error');
         } finally {
             showLoading(false);
         }
@@ -5078,14 +5083,15 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== GLOBAL FUNCTION EXPORTS ===========
     window.deleteMovie = deleteMovie;
     window.deleteUser = deleteUser;
-    window.testWasabiConnection = testWasabiConnection;
+    window.testBackblazeConnection = testBackblazeConnection;
     window.loadFinanceData = loadFinanceData;
     window.viewTransaction = viewTransaction;
     window.showVideoPlayer = showVideoPlayer;
     window.hideVideoPlayer = hideVideoPlayer;
 
     console.log('B/F Cinema Platform Initialization Complete!');
-    console.log('Using server endpoint:', WASABI_ENDPOINT);
+    console.log('Using server endpoint:', SERVER_ENDPOINT);
+    console.log('Backblaze configuration loaded:', BACKBLAZE_CONFIG);
     console.log('Plyr player initialized:', player ? 'Yes' : 'No');
     </script>
 </body>
