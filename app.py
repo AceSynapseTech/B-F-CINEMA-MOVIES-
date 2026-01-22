@@ -18,6 +18,9 @@ import re
 from decimal import Decimal
 import base64
 import requests
+import schedule
+import threading
+import atexit
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -122,7 +125,7 @@ def init_db():
         cursor.execute("PRAGMA foreign_keys = ON")
         
         # =========== CRITICAL: CREATE CORE TABLES ===========
-        # Movies table - SIMPLIFIED VERSION
+        # Movies table - UPDATED: Added expires_at column for auto-deletion
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS movies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +137,7 @@ def init_db():
                 poster_key TEXT,
                 uploaded_by TEXT DEFAULT 'Admin',
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,  -- When movie should be automatically deleted
                 views INTEGER DEFAULT 0,
                 download_count INTEGER DEFAULT 0,
                 storage TEXT DEFAULT 'backblaze',
@@ -210,17 +214,13 @@ def init_db():
             )
         """)
         
-        # Watch history table - UPDATED: Now tracks progress for real viewing
+        # Watch history table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS watch_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 movie_id INTEGER,
                 watched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                progress FLOAT DEFAULT 0,
-                duration_seconds INTEGER DEFAULT 0,
-                is_completed BOOLEAN DEFAULT 0,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
             )
@@ -246,6 +246,7 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_code ON transactions(transaction_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_transactions ON transactions(user_id, created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_access ON user_access(user_id, movie_id, is_active)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_movie_expires ON movies(expires_at, is_active)')
         
         # Check if admin user exists
         cursor.execute('SELECT * FROM users WHERE email = ?', ('BFCM2026@GMAIL.COM',))
@@ -390,6 +391,106 @@ def log_activity(user_id, user_email, action, details=None):
         conn.close()
     except Exception as e:
         logger.error(f"Activity log error: {str(e)}")
+
+# =========== AUTO-DELETION FUNCTIONS ===========
+def calculate_expiry_date():
+    """Calculate expiry date 10 months from now"""
+    return datetime.now() + timedelta(days=300)  # Approximately 10 months (30 days * 10)
+
+def delete_expired_movies():
+    """Delete movies that have passed their expiry date"""
+    try:
+        logger.info("🔍 Checking for expired movies to delete...")
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Get current timestamp
+        now = datetime.now()
+        
+        # Find movies that have expired (expires_at < now and is_active = 1)
+        cursor.execute('''
+            SELECT id, title, video_key, poster_key, uploaded_at, expires_at 
+            FROM movies 
+            WHERE expires_at IS NOT NULL 
+            AND expires_at < ? 
+            AND is_active = 1
+        ''', (now,))
+        
+        expired_movies = cursor.fetchall()
+        
+        if expired_movies:
+            logger.info(f"🗑️ Found {len(expired_movies)} expired movies to delete")
+            
+            for movie in expired_movies:
+                movie_dict = row_to_dict(movie)
+                movie_id = movie_dict['id']
+                movie_title = movie_dict['title']
+                
+                logger.info(f"🗑️ Deleting expired movie: {movie_title} (ID: {movie_id})")
+                
+                # Delete from Backblaze B2 if available
+                if s3_client and movie_dict['video_key']:
+                    try:
+                        # Delete video file
+                        s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['video_key'])
+                        logger.info(f"✅ Deleted video from Backblaze B2: {movie_dict['video_key']}")
+                        
+                        # Delete poster if exists
+                        if movie_dict.get('poster_key'):
+                            s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['poster_key'])
+                            logger.info(f"✅ Deleted poster from Backblaze B2: {movie_dict['poster_key']}")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Failed to delete from Backblaze B2 for movie {movie_id}: {str(e)}")
+                
+                # Mark movie as inactive in database
+                cursor.execute('UPDATE movies SET is_active = 0 WHERE id = ?', (movie_id,))
+                
+                # Log the deletion
+                log_activity('system', 'system@bfcinema.com', 'auto_delete_movie', {
+                    'movie_id': movie_id,
+                    'movie_title': movie_title,
+                    'uploaded_at': movie_dict['uploaded_at'],
+                    'expires_at': movie_dict['expires_at'],
+                    'deleted_at': now.isoformat()
+                })
+            
+            conn.commit()
+            logger.info(f"✅ Successfully deleted {len(expired_movies)} expired movies")
+        else:
+            logger.info("✅ No expired movies found")
+        
+        conn.close()
+        return len(expired_movies)
+        
+    except Exception as e:
+        logger.error(f"❌ Error deleting expired movies: {str(e)}")
+        logger.error(traceback.format_exc())
+        return 0
+
+def schedule_auto_deletion():
+    """Schedule automatic deletion of expired movies"""
+    try:
+        # Run deletion check daily at 2 AM
+        schedule.every().day.at("02:00").do(delete_expired_movies)
+        
+        # Also run immediately on startup
+        delete_expired_movies()
+        
+        logger.info("✅ Auto-deletion scheduler started")
+        
+        # Run the scheduler in a separate thread
+        def run_scheduler():
+            while True:
+                schedule.run_pending()
+                time.sleep(60)  # Check every minute
+        
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting auto-deletion scheduler: {str(e)}")
 
 # =========== NEW HELPER FUNCTIONS ===========
 def parse_mpesa_message(message):
@@ -728,6 +829,9 @@ def upload_movie_complete():
         # Generate stream URL
         stream_url = f"/api/stream/{unique_id}"
         
+        # Calculate expiry date (10 months from now)
+        expiry_date = calculate_expiry_date()
+        
         # Save to database
         conn = get_db()
         cursor = conn.cursor()
@@ -738,13 +842,14 @@ def upload_movie_complete():
             INSERT INTO movies (
                 title, description, year, duration,
                 video_key, poster_key,
-                uploaded_by, uploaded_at,
+                uploaded_by, uploaded_at, expires_at,
                 views, download_count, storage,
                 file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?)
         """, (
             title, description, year, duration, 
-            video_key, poster_key, session.get('name', 'Admin'), 
+            video_key, poster_key, session.get('name', 'Admin'),
+            expiry_date,
             file_size, 'video/mp4', video_url, stream_url
         ))
         
@@ -764,7 +869,8 @@ def upload_movie_complete():
         log_activity(session['user_id'], session['email'], 'upload_movie', {
             'title': title,
             'movie_id': movie_id,
-            'video_url': video_url
+            'video_url': video_url,
+            'expires_at': expiry_date.isoformat()
         })
         
         return jsonify({
@@ -773,7 +879,8 @@ def upload_movie_complete():
             'movie_id': movie_id,
             'title': title,
             'video_url': video_url,
-            'stream_url': stream_url
+            'stream_url': stream_url,
+            'expires_at': expiry_date.isoformat()
         })
         
     except Exception as e:
@@ -795,7 +902,7 @@ def stream_video_direct(movie_id):
         # Get movie details
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, title, s3_url FROM movies WHERE id = ?', (movie_id,))
+        cursor.execute('SELECT video_key, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         conn.close()
         
@@ -803,6 +910,10 @@ def stream_video_direct(movie_id):
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
+        
+        # Check if movie is active
+        if not movie_dict.get('is_active', 1):
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
         # Generate presigned URL
         video_url = None
@@ -857,12 +968,16 @@ def stream_movie_proxy(movie_id):
         # Get movie from database
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, file_type FROM movies WHERE id = ?', (movie_id_int,))
+        cursor.execute('SELECT video_key, file_type, is_active FROM movies WHERE id = ?', (movie_id_int,))
         movie = cursor.fetchone()
         conn.close()
         
         if not movie or not movie['video_key']:
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        
+        # Check if movie is active
+        if not movie.get('is_active', 1):
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
         # Generate presigned URL
         video_url = generate_presigned_url(movie['video_key'])
@@ -913,7 +1028,7 @@ def get_movie_stream_url(movie_id):
         # Get movie
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, file_type, title, s3_url FROM movies WHERE id = ?', (movie_id,))
+        cursor.execute('SELECT video_key, file_type, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         conn.close()
         
@@ -921,6 +1036,10 @@ def get_movie_stream_url(movie_id):
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
+        
+        # Check if movie is active
+        if not movie_dict.get('is_active', 1):
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
         # Generate streaming URL
         video_url = None
@@ -947,10 +1066,10 @@ def get_movie_stream_url(movie_id):
         logger.error(f"Stream URL error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# =========== NEW: SIMPLE STREAMING ENDPOINT WITHOUT WATCH HISTORY CHECKS ===========
+# =========== NEW: SIMPLE STREAMING ENDPOINT ===========
 @app.route('/api/simple-stream/<int:movie_id>', methods=['GET'])
 def simple_stream_movie(movie_id):
-    """Simple streaming endpoint that doesn't check watch history - ALWAYS returns video URL if access granted"""
+    """Simple streaming endpoint"""
     try:
         # Check authentication
         if 'user_id' not in session:
@@ -963,7 +1082,7 @@ def simple_stream_movie(movie_id):
         # Get movie
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, file_type, title, s3_url FROM movies WHERE id = ?', (movie_id,))
+        cursor.execute('SELECT video_key, file_type, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         conn.close()
         
@@ -971,6 +1090,10 @@ def simple_stream_movie(movie_id):
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
+        
+        # Check if movie is active
+        if not movie_dict.get('is_active', 1):
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
         # Generate streaming URL
         video_url = None
@@ -986,7 +1109,6 @@ def simple_stream_movie(movie_id):
         # Generate stream URL
         stream_url = f"/api/stream/{movie_id}"
         
-        # THIS IS THE KEY: Return the video URL WITHOUT checking watch history
         return jsonify({
             'success': True,
             'stream_url': stream_url,
@@ -1042,7 +1164,11 @@ def debug_movie(movie_id):
                 'stream_url': movie_dict.get('stream_url'),
                 'file_size': movie_dict.get('file_size', 0),
                 'file_type': movie_dict.get('file_type', 'video/mp4'),
-                'free_preview': bool(movie_dict.get('free_preview', False))
+                'free_preview': bool(movie_dict.get('free_preview', False)),
+                'is_active': bool(movie_dict.get('is_active', 1)),
+                'uploaded_at': movie_dict.get('uploaded_at'),
+                'expires_at': movie_dict.get('expires_at'),
+                'days_remaining': None if not movie_dict.get('expires_at') else (datetime.fromisoformat(movie_dict['expires_at']) - datetime.now()).days
             },
             'backblaze_connected': s3_client is not None
         })
@@ -1067,7 +1193,7 @@ def test_video_playback(movie_id):
     try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT video_key, title, s3_url FROM movies WHERE id = ?', (movie_id,))
+        cursor.execute('SELECT video_key, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         conn.close()
         
@@ -1085,6 +1211,7 @@ def test_video_playback(movie_id):
             'title': movie_dict['title'],
             'video_key': movie_dict['video_key'],
             'video_url': video_url,
+            'is_active': bool(movie_dict.get('is_active', 1)),
             'html_test': f'''
             <html>
             <body style="background: black; color: white; padding: 20px;">
@@ -1092,6 +1219,7 @@ def test_video_playback(movie_id):
                 <p>Testing video playback for movie ID: {movie_id}</p>
                 <p>Video Key: {movie_dict['video_key']}</p>
                 <p>Video URL: <a href="{video_url}" target="_blank">{video_url}</a></p>
+                <p>Status: {"✅ Active" if movie_dict.get('is_active', 1) else "❌ Expired/Deleted"}</p>
                 <div style="margin: 20px 0;">
                     <h3>Video Player Test:</h3>
                     <video controls style="width: 80%; max-width: 800px;" autoplay>
@@ -1388,6 +1516,12 @@ def get_movies():
             if not stream_url:
                 stream_url = f"/api/stream-video/{movie['id']}"
             
+            # Calculate days remaining until expiry
+            days_remaining = None
+            if movie.get('expires_at'):
+                expiry_date = datetime.fromisoformat(movie['expires_at'])
+                days_remaining = (expiry_date - datetime.now()).days
+            
             results.append({
                 'id': movie['id'],
                 'title': movie['title'],
@@ -1400,6 +1534,8 @@ def get_movies():
                 'views': movie.get('views', 0),
                 'downloads': movie.get('download_count', 0),
                 'uploaded_at': movie.get('uploaded_at'),
+                'expires_at': movie.get('expires_at'),
+                'days_remaining': days_remaining,
                 'has_access': has_access,
                 'free_preview': bool(movie.get('free_preview', False)),
                 'file_type': movie.get('file_type', 'video/mp4'),
@@ -1412,10 +1548,9 @@ def get_movies():
         logger.error(f"Get movies error: {traceback.format_exc()}")
         return jsonify(success=False, error="Failed to load movies"), 500
 
-# =========== UPDATED: WATCH MOVIE ENDPOINT ===========
 @app.route('/api/movies/<int:movie_id>/watch', methods=['POST'])
 def watch_movie(movie_id):
-    """Record movie watch - Now only counts as viewed after significant progress"""
+    """Record movie watch - Users can watch unlimited times"""
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -1424,202 +1559,36 @@ def watch_movie(movie_id):
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
-        data = request.get_json()
-        progress = data.get('progress', 0)  # Percentage watched (0-100)
-        duration_watched = data.get('duration_watched', 0)  # Seconds watched
-        
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get current watch history
+        # Check if movie is active
+        cursor.execute('SELECT is_active FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        
+        if not movie or not movie['is_active']:
+            conn.close()
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
+        
+        # Increment movie views (unlimited watching)
+        cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+        
+        # Add to watch history (unlimited entries)
         cursor.execute('''
-            SELECT * FROM watch_history 
-            WHERE user_id = ? AND movie_id = ? 
-            ORDER BY last_updated DESC 
-            LIMIT 1
-        ''', (session['user_id'], movie_id))
-        
-        existing_record = cursor.fetchone()
-        
-        # Only count as a view if user has watched at least 5 minutes (300 seconds) OR 70% of the movie
-        is_significant_watch = (duration_watched >= 300) or (progress >= 70)
-        
-        if existing_record:
-            existing_dict = row_to_dict(existing_record)
-            was_completed = existing_dict.get('is_completed', False)
-            
-            # Update existing record
-            cursor.execute('''
-                UPDATE watch_history 
-                SET progress = ?, duration_seconds = ?, 
-                    is_completed = ?, last_updated = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (progress, duration_watched, is_significant_watch, existing_dict['id']))
-            
-            # Only increment views if this is the first time reaching significant watch
-            if is_significant_watch and not was_completed:
-                # Increment movie views
-                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
-                
-                # Increment user's watched count if not admin
-                if session['user_id'] != 'admin_001':
-                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
-        else:
-            # Create new record
-            cursor.execute('''
-                INSERT INTO watch_history (user_id, movie_id, progress, duration_seconds, is_completed)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (session['user_id'], movie_id, progress, duration_watched, is_significant_watch))
-            
-            # Only increment views if significant watch on first record
-            if is_significant_watch:
-                # Increment movie views
-                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
-                
-                # Increment user's watched count if not admin
-                if session['user_id'] != 'admin_001':
-                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
+            INSERT INTO watch_history (user_id, movie_id, watched_at)
+            VALUES (?, ?, ?)
+        ''', (session['user_id'], movie_id, datetime.now()))
         
         conn.commit()
         conn.close()
         
-        log_activity(session['user_id'], session['email'], 'watch_movie_progress', {
-            'movie_id': movie_id,
-            'progress': progress,
-            'duration_watched': duration_watched,
-            'is_significant': is_significant_watch
-        })
+        log_activity(session['user_id'], session['email'], 'watch_movie', {'movie_id': movie_id})
         
-        return jsonify({
-            'success': True, 
-            'message': 'View progress recorded',
-            'is_significant_watch': is_significant_watch
-        })
+        return jsonify({'success': True, 'message': 'View recorded'})
         
     except Exception as e:
         logger.error(f"Watch movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to record view'}), 500
-
-# =========== NEW: ENDPOINT TO MARK MOVIE AS COMPLETED ===========
-@app.route('/api/movies/<int:movie_id>/mark-completed', methods=['POST'])
-def mark_movie_completed(movie_id):
-    """Explicitly mark a movie as completed"""
-    try:
-        if 'user_id' not in session:
-            return jsonify({'success': False, 'error': 'Authentication required'}), 401
-        
-        # First check if user has access
-        if not has_movie_access(session['user_id'], movie_id):
-            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
-        
-        data = request.get_json()
-        progress = data.get('progress', 100)  # Default to 100% if not specified
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        # Get current watch history
-        cursor.execute('''
-            SELECT * FROM watch_history 
-            WHERE user_id = ? AND movie_id = ? 
-            ORDER BY last_updated DESC 
-            LIMIT 1
-        ''', (session['user_id'], movie_id))
-        
-        existing_record = cursor.fetchone()
-        
-        if existing_record:
-            existing_dict = row_to_dict(existing_record)
-            was_completed = existing_dict.get('is_completed', False)
-            
-            # Update to mark as completed
-            cursor.execute('''
-                UPDATE watch_history 
-                SET progress = ?, duration_seconds = COALESCE(duration_seconds, 0) + 60,
-                    is_completed = 1, last_updated = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (progress, existing_dict['id']))
-            
-            # Only increment views if not already completed
-            if not was_completed:
-                # Increment movie views
-                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
-                
-                # Increment user's watched count if not admin
-                if session['user_id'] != 'admin_001':
-                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
-        else:
-            # Create new completed record
-            cursor.execute('''
-                INSERT INTO watch_history (user_id, movie_id, progress, duration_seconds, is_completed)
-                VALUES (?, ?, ?, ?, 1)
-            ''', (session['user_id'], movie_id, progress, 600))  # Default 10 minutes watched
-            
-            # Increment movie views
-            cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
-            
-            # Increment user's watched count if not admin
-            if session['user_id'] != 'admin_001':
-                cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
-        
-        conn.commit()
-        conn.close()
-        
-        log_activity(session['user_id'], session['email'], 'mark_movie_completed', {
-            'movie_id': movie_id,
-            'progress': progress
-        })
-        
-        return jsonify({
-            'success': True, 
-            'message': 'Movie marked as completed',
-            'view_counted': True
-        })
-        
-    except Exception as e:
-        logger.error(f"Mark completed error: {str(e)}")
-        return jsonify({'success': False, 'error': 'Failed to mark as completed'}), 500
-
-# =========== NEW: ENDPOINT TO GET WATCH PROGRESS ===========
-@app.route('/api/movies/<int:movie_id>/watch-progress', methods=['GET'])
-def get_watch_progress(movie_id):
-    """Get user's watch progress for a movie"""
-    try:
-        if 'user_id' not in session:
-            return jsonify({'success': False, 'progress': 0, 'is_completed': False})
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT progress, is_completed 
-            FROM watch_history 
-            WHERE user_id = ? AND movie_id = ? 
-            ORDER BY last_updated DESC 
-            LIMIT 1
-        ''', (session['user_id'], movie_id))
-        
-        record = cursor.fetchone()
-        conn.close()
-        
-        if record:
-            return jsonify({
-                'success': True,
-                'progress': record['progress'],
-                'is_completed': bool(record['is_completed']),
-                'has_record': True
-            })
-        else:
-            return jsonify({
-                'success': True,
-                'progress': 0,
-                'is_completed': False,
-                'has_record': False
-            })
-        
-    except Exception as e:
-        logger.error(f"Get watch progress error: {str(e)}")
-        return jsonify({'success': False, 'progress': 0, 'is_completed': False})
 
 @app.route('/api/movies/<int:movie_id>/download', methods=['POST'])
 def download_movie(movie_id):
@@ -1634,6 +1603,14 @@ def download_movie(movie_id):
         
         conn = get_db()
         cursor = conn.cursor()
+        
+        # Check if movie is active
+        cursor.execute('SELECT is_active FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        
+        if not movie or not movie['is_active']:
+            conn.close()
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
         # Get movie details
         cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
@@ -1710,6 +1687,12 @@ def get_movie_details(movie_id):
     user_id = session.get('user_id')
     has_access = has_movie_access(user_id, movie_id)
     
+    # Calculate days remaining until expiry
+    days_remaining = None
+    if movie_dict.get('expires_at'):
+        expiry_date = datetime.fromisoformat(movie_dict['expires_at'])
+        days_remaining = (expiry_date - datetime.now()).days
+    
     return jsonify(success=True, movie={
         'id': movie_dict['id'],
         'title': movie_dict['title'],
@@ -1722,6 +1705,10 @@ def get_movie_details(movie_id):
         'views': movie_dict.get('views', 0),
         'downloads': movie_dict.get('download_count', 0),
         'free_preview': bool(movie_dict.get('free_preview', False)),
+        'is_active': bool(movie_dict.get('is_active', 1)),
+        'uploaded_at': movie_dict.get('uploaded_at'),
+        'expires_at': movie_dict.get('expires_at'),
+        'days_remaining': days_remaining,
         'has_access': has_access
     })
 
@@ -1810,7 +1797,7 @@ def verify_payment(movie_id):
         
         transaction_id = cursor.lastrowid
         
-        # Grant PERMANENT access to movie
+        # Grant PERMANENT access to movie (unlimited watching)
         cursor.execute('''
             INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
             VALUES (?, ?, ?, 1)
@@ -2313,6 +2300,9 @@ def complete_upload():
         # Generate stream URL
         stream_url = f"/api/stream/{unique_id}"
         
+        # Calculate expiry date (10 months from now)
+        expiry_date = calculate_expiry_date()
+        
         # Save to database
         conn = get_db()
         cursor = conn.cursor()
@@ -2323,13 +2313,14 @@ def complete_upload():
             INSERT INTO movies (
                 title, description, year, duration,
                 video_key, poster_key,
-                uploaded_by, uploaded_at,
+                uploaded_by, uploaded_at, expires_at,
                 views, download_count, storage,
                 file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?)
         """, (
             title, description, year, duration, 
-            video_key, poster_key, session.get('name', 'Admin'), 
+            video_key, poster_key, session.get('name', 'Admin'),
+            expiry_date,
             file_size, 'video/mp4', video_url, stream_url
         ))
         
@@ -2346,7 +2337,8 @@ def complete_upload():
         
         log_activity(session['user_id'], session['email'], 'upload_movie_chunked', {
             'title': title,
-            'movie_id': movie_id
+            'movie_id': movie_id,
+            'expires_at': expiry_date.isoformat()
         })
         
         return jsonify({
@@ -2354,7 +2346,8 @@ def complete_upload():
             'message': 'Movie uploaded successfully',
             'movie_id': movie_id,
             'video_url': video_url,
-            'stream_url': stream_url
+            'stream_url': stream_url,
+            'expires_at': expiry_date.isoformat()
         })
         
     except Exception as e:
@@ -2382,8 +2375,12 @@ def get_admin_stats():
         cursor.execute('SELECT COUNT(*) FROM downloads')
         total_downloads = cursor.fetchone()[0]
         
+        # Get expired movies count
+        cursor.execute('SELECT COUNT(*) FROM movies WHERE expires_at < ? AND is_active = 1', (datetime.now(),))
+        expired_movies = cursor.fetchone()[0]
+        
         # Calculate storage used (estimate)
-        cursor.execute('SELECT SUM(file_size) FROM movies')
+        cursor.execute('SELECT SUM(file_size) FROM movies WHERE is_active = 1')
         total_size = cursor.fetchone()[0] or 0
         storage_used_gb = round(total_size / (1024 * 1024 * 1024), 2)
         
@@ -2418,6 +2415,7 @@ def get_admin_stats():
                 'total_movies': total_movies,
                 'total_users': total_users,
                 'total_downloads': total_downloads,
+                'expired_movies': expired_movies,
                 'storage_used': storage_used_gb,
                 'recent_activity': activity_list
             }
@@ -2517,6 +2515,9 @@ def upload_movie():
                 # Generate stream URL
                 stream_url = f"/api/stream/{unique_id}"
                 
+                # Calculate expiry date (10 months from now)
+                expiry_date = calculate_expiry_date()
+                
                 # Save to database
                 conn = get_db()
                 cursor = conn.cursor()
@@ -2525,13 +2526,14 @@ def upload_movie():
                     INSERT INTO movies (
                         title, description, year, duration,
                         video_key, poster_key,
-                        uploaded_by, uploaded_at,
+                        uploaded_by, uploaded_at, expires_at,
                         views, download_count, storage,
                         file_size, file_type, free_preview, s3_url, stream_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
                 """, (
                     title, description, year, duration, 
-                    video_key, poster_key, uploaded_by, 
+                    video_key, poster_key, uploaded_by,
+                    expiry_date,
                     video_size, file_type, free_preview, video_url, stream_url
                 ))
                 
@@ -2545,7 +2547,8 @@ def upload_movie():
                     'movie_id': movie_id,
                     'video_key': video_key,
                     'poster_key': poster_key,
-                    'video_url': video_url
+                    'video_url': video_url,
+                    'expires_at': expiry_date.isoformat()
                 })
                 
                 return jsonify({
@@ -2558,7 +2561,8 @@ def upload_movie():
                         'poster_key': poster_key,
                         'video_url': video_url,
                         'stream_url': stream_url,
-                        'free_preview': free_preview
+                        'free_preview': free_preview,
+                        'expires_at': expiry_date.isoformat()
                     }
                 })
                 
@@ -2577,6 +2581,9 @@ def upload_movie():
             poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
             stream_url = f"/api/stream/{title.replace(' ', '_')}"
             
+            # Calculate expiry date (10 months from now)
+            expiry_date = calculate_expiry_date()
+            
             conn = get_db()
             cursor = conn.cursor()
             
@@ -2584,13 +2591,14 @@ def upload_movie():
                 INSERT INTO movies (
                     title, description, year, duration,
                     video_key, poster_key,
-                    uploaded_by, uploaded_at,
+                    uploaded_by, uploaded_at, expires_at,
                     views, download_count, storage,
                     file_size, file_type, free_preview, s3_url, stream_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
             """, (
                 title, description, year, duration, 
                 video_key, poster_key, uploaded_by,
+                expiry_date,
                 video_size, 'video/mp4', free_preview, video_url, stream_url
             ))
             
@@ -2602,7 +2610,8 @@ def upload_movie():
             log_activity(session['user_id'], session['email'], 'upload_movie', {
                 'title': title,
                 'movie_id': movie_id,
-                'note': 'Backblaze B2 not available, used fallback URLs'
+                'note': 'Backblaze B2 not available, used fallback URLs',
+                'expires_at': expiry_date.isoformat()
             })
             
             return jsonify({
@@ -2615,7 +2624,8 @@ def upload_movie():
                     'poster_key': poster_key,
                     'video_url': video_url,
                     'stream_url': stream_url,
-                    'free_preview': free_preview
+                    'free_preview': free_preview,
+                    'expires_at': expiry_date.isoformat()
                 }
             })
         
@@ -2695,6 +2705,12 @@ def get_admin_movies():
             if not video_url and movie.get('s3_url'):
                 video_url = movie.get('s3_url')
             
+            # Calculate days remaining until expiry
+            days_remaining = None
+            if movie.get('expires_at'):
+                expiry_date = datetime.fromisoformat(movie['expires_at'])
+                days_remaining = (expiry_date - datetime.now()).days
+            
             movie_list.append({
                 'id': movie['id'],
                 'title': movie['title'],
@@ -2706,6 +2722,8 @@ def get_admin_movies():
                 'views': movie.get('views', 0),
                 'downloads': movie.get('download_count', 0),
                 'uploaded_at': movie.get('uploaded_at'),
+                'expires_at': movie.get('expires_at'),
+                'days_remaining': days_remaining,
                 'is_active': bool(movie.get('is_active', 1)),
                 'file_size': movie.get('file_size', 0),
                 'file_type': movie.get('file_type', 'video/mp4'),
@@ -2721,6 +2739,26 @@ def get_admin_movies():
     except Exception as e:
         logger.error(f"Get admin movies error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load movies'}), 500
+
+# =========== NEW: MANUAL DELETE EXPIRED MOVIES ENDPOINT ===========
+@app.route('/api/admin/delete-expired-movies', methods=['POST'])
+def manual_delete_expired_movies():
+    """Manually trigger deletion of expired movies (Admin only)"""
+    try:
+        if not session.get('is_admin'):
+            return jsonify({'success': False, 'error': 'Admin access required'}), 403
+        
+        deleted_count = delete_expired_movies()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Deleted {deleted_count} expired movies',
+            'deleted_count': deleted_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Manual delete expired movies error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Failed to delete expired movies'}), 500
 
 @app.route('/api/admin/users', methods=['GET'])
 def get_admin_users():
@@ -2817,7 +2855,7 @@ def get_user_downloads():
             SELECT DISTINCT m.*, ua.access_granted_at as downloaded_at
             FROM movies m
             LEFT JOIN user_access ua ON m.id = ua.movie_id AND ua.user_id = ?
-            WHERE ua.user_id = ? AND ua.is_active = 1
+            WHERE ua.user_id = ? AND ua.is_active = 1 AND m.is_active = 1
             ORDER BY ua.access_granted_at DESC
         ''', (session['user_id'], session['user_id']))
         
@@ -2825,10 +2863,10 @@ def get_user_downloads():
         
         # Also get explicit downloads from downloads table
         cursor.execute('''
-            SELECT d.*, m.title, m.poster_key, m.year, m.duration, m.video_key
+            SELECT d.*, m.title, m.poster_key, m.year, m.duration, m.video_key, m.is_active
             FROM downloads d
             JOIN movies m ON d.movie_id = m.id
-            WHERE d.user_id = ?
+            WHERE d.user_id = ? AND m.is_active = 1
             ORDER BY d.downloaded_at DESC
         ''', (session['user_id'],))
         
@@ -2849,6 +2887,12 @@ def get_user_downloads():
                 video_url = generate_presigned_url(movie.get('video_key'))
                 poster_url = generate_presigned_url(movie.get('poster_key'))
                 
+                # Calculate days remaining until expiry
+                days_remaining = None
+                if movie.get('expires_at'):
+                    expiry_date = datetime.fromisoformat(movie['expires_at'])
+                    days_remaining = (expiry_date - datetime.now()).days
+                
                 download_dict[movie_id] = {
                     'movieId': movie_id,
                     'downloadedAt': movie.get('downloaded_at') or datetime.now().isoformat(),
@@ -2861,7 +2905,10 @@ def get_user_downloads():
                         'url': video_url,
                         'description': movie.get('description', ''),
                         'views': movie.get('views', 0),
-                        'downloads': movie.get('download_count', 0)
+                        'downloads': movie.get('download_count', 0),
+                        'is_active': bool(movie.get('is_active', 1)),
+                        'expires_at': movie.get('expires_at'),
+                        'days_remaining': days_remaining
                     }
                 }
         
@@ -2880,6 +2927,12 @@ def get_user_downloads():
                     video_url = generate_presigned_url(download.get('video_key'))
                     poster_url = generate_presigned_url(download.get('poster_key'))
                     
+                    # Calculate days remaining until expiry
+                    days_remaining = None
+                    if download.get('expires_at'):
+                        expiry_date = datetime.fromisoformat(download['expires_at'])
+                        days_remaining = (expiry_date - datetime.now()).days
+                    
                     download_dict[movie_id] = {
                         'movieId': movie_id,
                         'downloadedAt': download['downloaded_at'],
@@ -2889,6 +2942,9 @@ def get_user_downloads():
                             'year': download.get('year'),
                             'duration': download.get('duration'),
                             'url': video_url,
+                            'is_active': bool(download.get('is_active', 1)),
+                            'expires_at': download.get('expires_at'),
+                            'days_remaining': days_remaining,
                             **movie_data
                         }
                     }
@@ -3024,13 +3080,13 @@ def add_to_downloads_after_payment(movie_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Check if movie exists
-        cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
+        # Check if movie exists and is active
+        cursor.execute('SELECT * FROM movies WHERE id = ? AND is_active = 1', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie:
             conn.close()
-            return jsonify({'success': False, 'error': 'Movie not found'}), 404
+            return jsonify({'success': False, 'error': 'Movie not found or has expired'}), 404
         
         movie_dict = row_to_dict(movie)
         
@@ -3061,7 +3117,9 @@ def add_to_downloads_after_payment(movie_id):
             'duration': movie_dict.get('duration'),
             'url': video_url,
             'views': movie_dict.get('views', 0),
-            'downloads': movie_dict.get('download_count', 0)
+            'downloads': movie_dict.get('download_count', 0),
+            'is_active': bool(movie_dict.get('is_active', 1)),
+            'expires_at': movie_dict.get('expires_at')
         })
         
         cursor.execute('''
@@ -3128,6 +3186,11 @@ def not_found(error):
     """Handle 404 errors"""
     return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
 
+@app.errorhandler(410)
+def gone(error):
+    """Handle 410 errors (Gone - movie expired)"""
+    return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
+
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors"""
@@ -3191,7 +3254,7 @@ def debug_db_schema():
             'pk': col[5]
         })
     
-    # Check if s3_url and stream_url exist
+    # Check if expires_at exists
     column_names = [col['name'] for col in schema]
     
     conn.close()
@@ -3200,6 +3263,7 @@ def debug_db_schema():
         'success': True,
         'table': 'movies',
         'columns': schema,
+        'has_expires_at': 'expires_at' in column_names,
         'has_s3_url': 's3_url' in column_names,
         'has_stream_url': 'stream_url' in column_names,
         'message': 'Database schema check'
@@ -3215,6 +3279,7 @@ if __name__ == '__main__':
     print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
     print(f"🔗 B2 Bucket: {BACKBLAZE_CONFIG['bucket']}")
     print(f"📍 Endpoint: {BACKBLAZE_CONFIG['endpoint']}")
+    print(f"🗑️  Auto-deletion: ✅ Enabled (10 months expiry)")
     print("="*60)
     
     # Configure CORS on Backblaze B2
@@ -3223,6 +3288,13 @@ if __name__ == '__main__':
             configure_s3_cors()
         except:
             print("⚠️  Could not configure CORS automatically")
+    
+    # Start the auto-deletion scheduler
+    try:
+        schedule_auto_deletion()
+        print("✅ Auto-deletion scheduler started")
+    except Exception as e:
+        print(f"⚠️  Could not start auto-deletion scheduler: {str(e)}")
     
     print("\n🚀 Starting server...")
     
