@@ -5,3 +5,4 @@ cryptography==41.0.7
 requests==2.31.0
 segno==1.5.2
 Werkzeug==2.3.7
+schedule==1.2.0
