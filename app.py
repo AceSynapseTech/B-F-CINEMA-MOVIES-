@@ -3,7 +3,7 @@ from flask_cors import CORS
 import boto3
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -210,7 +210,7 @@ def init_db():
             )
         """)
         
-        # Watch history table - FOR STATISTICS ONLY, NOT ACCESS CONTROL
+        # Watch history table - UPDATED: Now tracks progress for real viewing
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS watch_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,6 +218,9 @@ def init_db():
                 movie_id INTEGER,
                 watched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 progress FLOAT DEFAULT 0,
+                duration_seconds INTEGER DEFAULT 0,
+                is_completed BOOLEAN DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
             )
@@ -1409,9 +1412,10 @@ def get_movies():
         logger.error(f"Get movies error: {traceback.format_exc()}")
         return jsonify(success=False, error="Failed to load movies"), 500
 
+# =========== UPDATED: WATCH MOVIE ENDPOINT ===========
 @app.route('/api/movies/<int:movie_id>/watch', methods=['POST'])
 def watch_movie(movie_id):
-    """Record movie watch - THIS IS FOR STATISTICS ONLY, NOT ACCESS CONTROL"""
+    """Record movie watch - Now only counts as viewed after significant progress"""
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -1420,32 +1424,202 @@ def watch_movie(movie_id):
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
+        data = request.get_json()
+        progress = data.get('progress', 0)  # Percentage watched (0-100)
+        duration_watched = data.get('duration_watched', 0)  # Seconds watched
+        
         conn = get_db()
         cursor = conn.cursor()
         
-        # Increment movie views
-        cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+        # Get current watch history
+        cursor.execute('''
+            SELECT * FROM watch_history 
+            WHERE user_id = ? AND movie_id = ? 
+            ORDER BY last_updated DESC 
+            LIMIT 1
+        ''', (session['user_id'], movie_id))
         
-        # Increment user's watched count if not admin
-        if session['user_id'] != 'admin_001':
-            cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
+        existing_record = cursor.fetchone()
+        
+        # Only count as a view if user has watched at least 5 minutes (300 seconds) OR 70% of the movie
+        is_significant_watch = (duration_watched >= 300) or (progress >= 70)
+        
+        if existing_record:
+            existing_dict = row_to_dict(existing_record)
+            was_completed = existing_dict.get('is_completed', False)
             
-            # Add to watch history (FOR STATISTICS ONLY - THIS DOES NOT CONTROL ACCESS)
+            # Update existing record
             cursor.execute('''
-                INSERT OR REPLACE INTO watch_history (user_id, movie_id, watched_at)
-                VALUES (?, ?, ?)
-            ''', (session['user_id'], movie_id, datetime.now()))
+                UPDATE watch_history 
+                SET progress = ?, duration_seconds = ?, 
+                    is_completed = ?, last_updated = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (progress, duration_watched, is_significant_watch, existing_dict['id']))
+            
+            # Only increment views if this is the first time reaching significant watch
+            if is_significant_watch and not was_completed:
+                # Increment movie views
+                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+                
+                # Increment user's watched count if not admin
+                if session['user_id'] != 'admin_001':
+                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
+        else:
+            # Create new record
+            cursor.execute('''
+                INSERT INTO watch_history (user_id, movie_id, progress, duration_seconds, is_completed)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (session['user_id'], movie_id, progress, duration_watched, is_significant_watch))
+            
+            # Only increment views if significant watch on first record
+            if is_significant_watch:
+                # Increment movie views
+                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+                
+                # Increment user's watched count if not admin
+                if session['user_id'] != 'admin_001':
+                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
         
         conn.commit()
         conn.close()
         
-        log_activity(session['user_id'], session['email'], 'watch_movie', {'movie_id': movie_id})
+        log_activity(session['user_id'], session['email'], 'watch_movie_progress', {
+            'movie_id': movie_id,
+            'progress': progress,
+            'duration_watched': duration_watched,
+            'is_significant': is_significant_watch
+        })
         
-        return jsonify({'success': True, 'message': 'View recorded'})
+        return jsonify({
+            'success': True, 
+            'message': 'View progress recorded',
+            'is_significant_watch': is_significant_watch
+        })
         
     except Exception as e:
         logger.error(f"Watch movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to record view'}), 500
+
+# =========== NEW: ENDPOINT TO MARK MOVIE AS COMPLETED ===========
+@app.route('/api/movies/<int:movie_id>/mark-completed', methods=['POST'])
+def mark_movie_completed(movie_id):
+    """Explicitly mark a movie as completed"""
+    try:
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        # First check if user has access
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
+        
+        data = request.get_json()
+        progress = data.get('progress', 100)  # Default to 100% if not specified
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Get current watch history
+        cursor.execute('''
+            SELECT * FROM watch_history 
+            WHERE user_id = ? AND movie_id = ? 
+            ORDER BY last_updated DESC 
+            LIMIT 1
+        ''', (session['user_id'], movie_id))
+        
+        existing_record = cursor.fetchone()
+        
+        if existing_record:
+            existing_dict = row_to_dict(existing_record)
+            was_completed = existing_dict.get('is_completed', False)
+            
+            # Update to mark as completed
+            cursor.execute('''
+                UPDATE watch_history 
+                SET progress = ?, duration_seconds = COALESCE(duration_seconds, 0) + 60,
+                    is_completed = 1, last_updated = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (progress, existing_dict['id']))
+            
+            # Only increment views if not already completed
+            if not was_completed:
+                # Increment movie views
+                cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+                
+                # Increment user's watched count if not admin
+                if session['user_id'] != 'admin_001':
+                    cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
+        else:
+            # Create new completed record
+            cursor.execute('''
+                INSERT INTO watch_history (user_id, movie_id, progress, duration_seconds, is_completed)
+                VALUES (?, ?, ?, ?, 1)
+            ''', (session['user_id'], movie_id, progress, 600))  # Default 10 minutes watched
+            
+            # Increment movie views
+            cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
+            
+            # Increment user's watched count if not admin
+            if session['user_id'] != 'admin_001':
+                cursor.execute('UPDATE users SET movies_watched = movies_watched + 1 WHERE id = ?', (session['user_id'],))
+        
+        conn.commit()
+        conn.close()
+        
+        log_activity(session['user_id'], session['email'], 'mark_movie_completed', {
+            'movie_id': movie_id,
+            'progress': progress
+        })
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Movie marked as completed',
+            'view_counted': True
+        })
+        
+    except Exception as e:
+        logger.error(f"Mark completed error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Failed to mark as completed'}), 500
+
+# =========== NEW: ENDPOINT TO GET WATCH PROGRESS ===========
+@app.route('/api/movies/<int:movie_id>/watch-progress', methods=['GET'])
+def get_watch_progress(movie_id):
+    """Get user's watch progress for a movie"""
+    try:
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'progress': 0, 'is_completed': False})
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT progress, is_completed 
+            FROM watch_history 
+            WHERE user_id = ? AND movie_id = ? 
+            ORDER BY last_updated DESC 
+            LIMIT 1
+        ''', (session['user_id'], movie_id))
+        
+        record = cursor.fetchone()
+        conn.close()
+        
+        if record:
+            return jsonify({
+                'success': True,
+                'progress': record['progress'],
+                'is_completed': bool(record['is_completed']),
+                'has_record': True
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'progress': 0,
+                'is_completed': False,
+                'has_record': False
+            })
+        
+    except Exception as e:
+        logger.error(f"Get watch progress error: {str(e)}")
+        return jsonify({'success': False, 'progress': 0, 'is_completed': False})
 
 @app.route('/api/movies/<int:movie_id>/download', methods=['POST'])
 def download_movie(movie_id):
