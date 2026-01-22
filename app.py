@@ -78,35 +78,33 @@ CORS(app,
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
      expose_headers=['Content-Type', 'Authorization', 'Content-Range', 'Accept-Ranges', 'Content-Length'])
 
-# =========== WASABI S3 CONFIGURATION ===========
-# Use environment variables for Wasabi credentials (set these in Render dashboard)
-WASABI_CONFIG = {
-    'access_key': os.getenv('WASABI_ACCESS_KEY', 'NLXDDRMUWSYD2PW7IY8S'),
-    'secret_key': os.getenv('WASABI_SECRET_KEY', 'iFnXOuPM01lqjVJ4IaWLLsGdTrUqwoJc56S742rm'),
-    'bucket': os.getenv('WASABI_BUCKET', 'bfcinema'),
-    'region': os.getenv('WASABI_REGION', 'eu-central-2'),
-    'endpoint': os.getenv('WASABI_ENDPOINT', 'https://s3.eu-central-2.wasabisys.com')
+# =========== BACKBLAZE B2 CONFIGURATION ===========
+# Use environment variables for Backblaze credentials (set these in Render dashboard)
+BACKBLAZE_CONFIG = {
+    'key_id': os.getenv('BACKBLAZE_KEY_ID', '0033811f85f980c0000000001'),
+    'application_key': os.getenv('BACKBLAZE_APPLICATION_KEY', 'K003ROCPq4vNmTQXZx9h4fZ0ozcFzVM'),
+    'bucket': os.getenv('BACKBLAZE_BUCKET', 'bfcinema'),
+    'endpoint': os.getenv('BACKBLAZE_ENDPOINT', 'https://s3.eu-central-003.backblazeb2.com')
 }
 
-# Initialize S3 client
+# Initialize Backblaze B2 S3 client
 s3_client = None
 try:
     s3_client = boto3.client(
         's3',
-        endpoint_url=WASABI_CONFIG['endpoint'],
-        aws_access_key_id=WASABI_CONFIG['access_key'],
-        aws_secret_access_key=WASABI_CONFIG['secret_key'],
-        region_name=WASABI_CONFIG['region'],
+        endpoint_url=BACKBLAZE_CONFIG['endpoint'],
+        aws_access_key_id=BACKBLAZE_CONFIG['key_id'],
+        aws_secret_access_key=BACKBLAZE_CONFIG['application_key'],
         config=boto3.session.Config(signature_version='s3v4')
     )
-    logger.info("✅ Wasabi S3 client initialized successfully")
+    logger.info("✅ Backblaze B2 S3 client initialized successfully")
     
     # Test connection by listing buckets
     response = s3_client.list_buckets()
-    logger.info(f"✅ Connected to Wasabi. Buckets: {[b['Name'] for b in response['Buckets']]}")
+    logger.info(f"✅ Connected to Backblaze B2. Buckets: {[b['Name'] for b in response['Buckets']]}")
     
 except Exception as e:
-    logger.error(f"❌ Failed to initialize S3 client: {str(e)}")
+    logger.error(f"❌ Failed to initialize Backblaze B2 S3 client: {str(e)}")
     logger.info("⚠️ Using local storage fallback for testing")
 
 # =========== DATABASE INITIALIZATION ===========
@@ -138,7 +136,7 @@ def init_db():
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 views INTEGER DEFAULT 0,
                 download_count INTEGER DEFAULT 0,
-                storage TEXT DEFAULT 'wasabi',
+                storage TEXT DEFAULT 'backblaze',
                 is_active BOOLEAN DEFAULT 1,
                 file_size INTEGER DEFAULT 0,
                 file_type TEXT DEFAULT 'video/mp4',
@@ -332,7 +330,7 @@ def generate_presigned_url(key, expires=7200):
         url = s3_client.generate_presigned_url(
             'get_object',
             Params={
-                'Bucket': WASABI_CONFIG['bucket'],
+                'Bucket': BACKBLAZE_CONFIG['bucket'],
                 'Key': key,
                 'ResponseContentType': content_type,
                 'ResponseContentDisposition': 'inline',  # Important for browser playback
@@ -351,11 +349,26 @@ def generate_presigned_url(key, expires=7200):
         return None
 
 def generate_s3_public_url(key):
-    """Generate direct S3 public URL (if bucket is public)"""
+    """Generate direct Backblaze B2 public URL"""
     if not key:
         return None
     
-    return f"https://{WASABI_CONFIG['bucket']}.s3.{WASABI_CONFIG['region']}.wasabisys.com/{key}"
+    # Backblaze B2 public URL format
+    endpoint = BACKBLAZE_CONFIG['endpoint']
+    bucket = BACKBLAZE_CONFIG['bucket']
+    
+    # Extract the host from endpoint
+    if 'backblazeb2.com' in endpoint:
+        # Format: https://bucket.s3.region.backblazeb2.com/key
+        # Extract region from endpoint
+        import re
+        match = re.search(r'https://s3\.(.+?)\.backblazeb2\.com', endpoint)
+        if match:
+            region = match.group(1)
+            return f"https://{bucket}.s3.{region}.backblazeb2.com/{key}"
+    
+    # Fallback to simpler format
+    return f"{endpoint}/file/{bucket}/{key}"
 
 def log_activity(user_id, user_email, action, details=None):
     """Log user activity"""
@@ -663,7 +676,7 @@ def upload_movie_complete():
         if not video_path or not os.path.exists(video_path):
             return jsonify({'success': False, 'error': 'Video file not found'}), 400
         
-        # Upload to Wasabi
+        # Upload to Backblaze B2
         unique_id = str(uuid.uuid4())[:8]
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
         
@@ -677,14 +690,14 @@ def upload_movie_complete():
                 with open(video_path, 'rb') as f:
                     s3_client.upload_fileobj(
                         f,
-                        WASABI_CONFIG['bucket'],
+                        BACKBLAZE_CONFIG['bucket'],
                         video_key,
                         ExtraArgs={'ContentType': 'video/mp4'}
                     )
                 video_url = generate_presigned_url(video_key)
-                logger.info(f"Video uploaded to S3: {video_key}")
+                logger.info(f"Video uploaded to Backblaze B2: {video_key}")
             except Exception as e:
-                logger.error(f"Failed to upload to S3: {str(e)}")
+                logger.error(f"Failed to upload to Backblaze B2: {str(e)}")
                 # Use fallback URL
                 video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         
@@ -700,13 +713,13 @@ def upload_movie_complete():
                     with open(poster_path, 'rb') as f:
                         s3_client.upload_fileobj(
                             f,
-                            WASABI_CONFIG['bucket'],
+                            BACKBLAZE_CONFIG['bucket'],
                             poster_key,
                             ExtraArgs={'ContentType': 'image/jpeg'}
                         )
                     poster_url = generate_presigned_url(poster_key)
                 except Exception as e:
-                    logger.error(f"Failed to upload poster to S3: {str(e)}")
+                    logger.error(f"Failed to upload poster to Backblaze B2: {str(e)}")
                     poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
         
         # Generate stream URL
@@ -725,7 +738,7 @@ def upload_movie_complete():
                 uploaded_by, uploaded_at,
                 views, download_count, storage,
                 file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'wasabi', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?)
         """, (
             title, description, year, duration, 
             video_key, poster_key, session.get('name', 'Admin'), 
@@ -793,7 +806,7 @@ def stream_video_direct(movie_id):
         if movie_dict['video_key']:
             video_url = generate_presigned_url(movie_dict['video_key'])
         
-        # If S3 URL generation fails, use fallback
+        # If Backblaze B2 URL generation fails, use fallback
         if not video_url and movie_dict['s3_url']:
             video_url = movie_dict['s3_url']
         elif not video_url:
@@ -1028,7 +1041,7 @@ def debug_movie(movie_id):
                 'file_type': movie_dict.get('file_type', 'video/mp4'),
                 'free_preview': bool(movie_dict.get('free_preview', False))
             },
-            's3_connected': s3_client is not None
+            'backblaze_connected': s3_client is not None
         })
         
     except Exception as e:
@@ -1104,15 +1117,15 @@ def health_check():
         'service': 'B/F Cinema Streaming Platform',
         'timestamp': datetime.now().isoformat(),
         'database': 'connected',
-        's3_connected': s3_client is not None,
+        'backblaze_connected': s3_client is not None,
         'version': '2.0.0',
         'render': RENDER,
         'environment': 'production' if RENDER else 'development'
     })
 
 @app.route('/test-connection', methods=['GET'])
-def test_wasabi_connection():
-    """Test Wasabi S3 connection"""
+def test_backblaze_connection():
+    """Test Backblaze B2 connection"""
     try:
         if s3_client:
             # Try to list buckets to test connection
@@ -1120,18 +1133,18 @@ def test_wasabi_connection():
             buckets = [bucket['Name'] for bucket in response['Buckets']]
             
             # Check if our bucket exists
-            bucket_exists = WASABI_CONFIG['bucket'] in buckets
+            bucket_exists = BACKBLAZE_CONFIG['bucket'] in buckets
             
             return jsonify({
                 'success': True,
-                'message': 'Wasabi connection successful',
+                'message': 'Backblaze B2 connection successful',
                 'bucket_exists': bucket_exists,
                 'buckets': buckets
             })
         else:
             return jsonify({
                 'success': False,
-                'message': 'S3 client not initialized',
+                'message': 'Backblaze B2 client not initialized',
                 'bucket_exists': False
             })
     except Exception as e:
@@ -1355,7 +1368,7 @@ def get_movies():
             video_url = generate_presigned_url(movie.get('video_key'))
             poster_url = generate_presigned_url(movie.get('poster_key'))
             
-            # If S3 fails, use fallback URLs
+            # If Backblaze B2 fails, use fallback URLs
             if not video_url and movie.get('s3_url'):
                 video_url = movie.get('s3_url')
             if not video_url:
@@ -2047,7 +2060,7 @@ def upload_chunk():
 
 @app.route('/api/complete-upload', methods=['POST'])
 def complete_upload():
-    """Combine chunks and upload to Wasabi"""
+    """Combine chunks and upload to Backblaze B2"""
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2087,7 +2100,7 @@ def complete_upload():
                         with open(os.path.join(temp_dir, chunk_file), 'rb') as infile:
                             outfile.write(infile.read())
         
-        # Upload to Wasabi
+        # Upload to Backblaze B2
         unique_id = str(uuid.uuid4())[:8]
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
         
@@ -2100,7 +2113,7 @@ def complete_upload():
             with open(movie_path, 'rb') as f:
                 s3_client.upload_fileobj(
                     f,
-                    WASABI_CONFIG['bucket'],
+                    BACKBLAZE_CONFIG['bucket'],
                     video_key,
                     ExtraArgs={'ContentType': 'video/mp4'}
                 )
@@ -2117,7 +2130,7 @@ def complete_upload():
                 with open(poster_path, 'rb') as f:
                     s3_client.upload_fileobj(
                         f,
-                        WASABI_CONFIG['bucket'],
+                        BACKBLAZE_CONFIG['bucket'],
                         poster_key,
                         ExtraArgs={'ContentType': 'image/jpeg'}
                     )
@@ -2139,7 +2152,7 @@ def complete_upload():
                 uploaded_by, uploaded_at,
                 views, download_count, storage,
                 file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'wasabi', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?)
         """, (
             title, description, year, duration, 
             video_key, poster_key, session.get('name', 'Admin'), 
@@ -2242,7 +2255,7 @@ def get_admin_stats():
 
 @app.route('/api/admin/upload-movie', methods=['POST'])
 def upload_movie():
-    """Upload movie to Wasabi"""
+    """Upload movie to Backblaze B2"""
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2273,7 +2286,7 @@ def upload_movie():
         # Get uploaded_by from session
         uploaded_by = session.get('name', 'Admin')
         
-        # Upload to Wasabi S3
+        # Upload to Backblaze B2
         if s3_client:
             try:
                 # Generate unique filenames
@@ -2290,11 +2303,11 @@ def upload_movie():
                 
                 # Upload video
                 video_key = f"movies/{unique_id}_{safe_title}{video_ext}"
-                logger.info(f"Uploading video to: {video_key}")
+                logger.info(f"Uploading video to Backblaze B2: {video_key}")
                 
                 s3_client.upload_fileobj(
                     video_file,
-                    WASABI_CONFIG['bucket'],
+                    BACKBLAZE_CONFIG['bucket'],
                     video_key,
                     ExtraArgs={'ContentType': file_type}
                 )
@@ -2312,11 +2325,11 @@ def upload_movie():
                         poster_ext = '.jpg'
                     
                     poster_key = f"posters/{unique_id}_{safe_title}{poster_ext}"
-                    logger.info(f"Uploading poster to: {poster_key}")
+                    logger.info(f"Uploading poster to Backblaze B2: {poster_key}")
                     
                     s3_client.upload_fileobj(
                         poster_file,
-                        WASABI_CONFIG['bucket'],
+                        BACKBLAZE_CONFIG['bucket'],
                         poster_key,
                         ExtraArgs={'ContentType': 'image/jpeg'}
                     )
@@ -2341,7 +2354,7 @@ def upload_movie():
                         uploaded_by, uploaded_at,
                         views, download_count, storage,
                         file_size, file_type, free_preview, s3_url, stream_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'wasabi', ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
                 """, (
                     title, description, year, duration, 
                     video_key, poster_key, uploaded_by, 
@@ -2363,7 +2376,7 @@ def upload_movie():
                 
                 return jsonify({
                     'success': True,
-                    'message': 'Movie uploaded successfully to Wasabi',
+                    'message': 'Movie uploaded successfully to Backblaze B2',
                     'movie': {
                         'id': movie_id,
                         'title': title,
@@ -2376,11 +2389,11 @@ def upload_movie():
                 })
                 
             except Exception as e:
-                logger.error(f"S3 upload error: {traceback.format_exc()}")
-                return jsonify({'success': False, 'error': f'S3 upload failed: {str(e)}'}), 500
+                logger.error(f"Backblaze B2 upload error: {traceback.format_exc()}")
+                return jsonify({'success': False, 'error': f'Backblaze B2 upload failed: {str(e)}'}), 500
         else:
-            # S3 client not available - use fallback
-            logger.warning("S3 client not available, using fallback URLs")
+            # Backblaze B2 client not available - use fallback
+            logger.warning("Backblaze B2 client not available, using fallback URLs")
             
             video_key = f"fallback_movies/{title.replace(' ', '_')}.mp4"
             poster_key = f"fallback_posters/{title.replace(' ', '_')}.jpg"
@@ -2400,7 +2413,7 @@ def upload_movie():
                     uploaded_by, uploaded_at,
                     views, download_count, storage,
                     file_size, file_type, free_preview, s3_url, stream_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'wasabi', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
             """, (
                 title, description, year, duration, 
                 video_key, poster_key, uploaded_by,
@@ -2415,12 +2428,12 @@ def upload_movie():
             log_activity(session['user_id'], session['email'], 'upload_movie', {
                 'title': title,
                 'movie_id': movie_id,
-                'note': 'S3 not available, used fallback URLs'
+                'note': 'Backblaze B2 not available, used fallback URLs'
             })
             
             return jsonify({
                 'success': True,
-                'message': 'Movie saved with fallback URLs (S3 not available)',
+                'message': 'Movie saved with fallback URLs (Backblaze B2 not available)',
                 'movie': {
                     'id': movie_id,
                     'title': title,
@@ -2438,7 +2451,7 @@ def upload_movie():
 
 @app.route('/api/admin/movies/<int:movie_id>', methods=['DELETE'])
 def delete_movie(movie_id):
-    """Delete movie from Wasabi and database"""
+    """Delete movie from Backblaze B2 and database"""
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2456,16 +2469,16 @@ def delete_movie(movie_id):
         
         movie_dict = row_to_dict(movie)
         
-        # Delete from S3 if available
+        # Delete from Backblaze B2 if available
         if s3_client and movie_dict['video_key']:
             try:
-                s3_client.delete_object(Bucket=WASABI_CONFIG['bucket'], Key=movie_dict['video_key'])
+                s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['video_key'])
                 
                 if movie_dict.get('poster_key'):
-                    s3_client.delete_object(Bucket=WASABI_CONFIG['bucket'], Key=movie_dict['poster_key'])
+                    s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['poster_key'])
                     
             except Exception as e:
-                logger.warning(f"Failed to delete from S3: {str(e)}")
+                logger.warning(f"Failed to delete from Backblaze B2: {str(e)}")
         
         # Delete from database
         cursor.execute('DELETE FROM movies WHERE id = ?', (movie_id,))
@@ -2903,13 +2916,13 @@ def add_to_downloads_after_payment(movie_id):
 # =========== MISC ENDPOINTS ===========
 @app.route('/api/test-s3-url/<path:key>', methods=['GET'])
 def test_s3_url(key):
-    """Test S3 URL accessibility"""
+    """Test Backblaze B2 URL accessibility"""
     try:
         if not s3_client:
-            return jsonify({'success': False, 'error': 'S3 client not available'})
+            return jsonify({'success': False, 'error': 'Backblaze B2 client not available'})
         
         # Generate public URL
-        public_url = f"https://{WASABI_CONFIG['bucket']}.s3.{WASABI_CONFIG['region']}.wasabisys.com/{key}"
+        public_url = generate_s3_public_url(key)
         
         # Generate presigned URL
         presigned_url = generate_presigned_url(key)
@@ -2954,9 +2967,9 @@ def too_large(error):
 
 # =========== CORS CONFIGURATION SCRIPT ===========
 def configure_s3_cors():
-    """Configure CORS on Wasabi bucket"""
+    """Configure CORS on Backblaze B2 bucket"""
     if not s3_client:
-        print("❌ S3 client not available")
+        print("❌ Backblaze B2 client not available")
         return
     
     try:
@@ -2973,11 +2986,11 @@ def configure_s3_cors():
         }
         
         s3_client.put_bucket_cors(
-            Bucket=WASABI_CONFIG['bucket'],
+            Bucket=BACKBLAZE_CONFIG['bucket'],
             CORSConfiguration=cors_configuration
         )
         
-        print("✅ CORS configured successfully for Wasabi bucket")
+        print("✅ CORS configured successfully for Backblaze B2 bucket")
         
     except Exception as e:
         print(f"❌ Failed to configure CORS: {str(e)}")
@@ -3021,16 +3034,16 @@ def debug_db_schema():
 # =========== APPLICATION START ===========
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (FIXED FOR RENDER)")
+    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (BACKBLAZE B2)")
     print("="*60)
     print(f"📁 Environment: {'PRODUCTION' if RENDER else 'DEVELOPMENT'}")
     print(f"📁 Database: {'/tmp/bfcinema.db' if RENDER else 'bfcinema.db'}")
-    print(f"☁️  Wasabi S3: {'✅ Connected' if s3_client else '❌ Not Connected'}")
-    print(f"🔗 S3 Bucket: {WASABI_CONFIG['bucket']}")
-    print(f"📍 Region: {WASABI_CONFIG['region']}")
+    print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
+    print(f"🔗 B2 Bucket: {BACKBLAZE_CONFIG['bucket']}")
+    print(f"📍 Endpoint: {BACKBLAZE_CONFIG['endpoint']}")
     print("="*60)
     
-    # Configure CORS on Wasabi
+    # Configure CORS on Backblaze B2
     if s3_client:
         try:
             configure_s3_cors()
