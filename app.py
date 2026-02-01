@@ -21,6 +21,43 @@ import requests
 import schedule
 import threading
 import atexit
+import shutil
+
+# =========== CRITICAL FIX: IMPORTS ===========
+# Try to import segno for QR codes, fallback if not available
+try:
+    import segno
+    QR_AVAILABLE = True
+except ImportError:
+    QR_AVAILABLE = False
+
+# =========== CRITICAL FIX: DATABASE & STORAGE PATHS ===========
+def get_persistent_path(filename):
+    """Get persistent path that survives server restarts"""
+    if os.getenv('RENDER', 'false').lower() == 'true':
+        # On Render, use /data directory which is persistent
+        data_dir = '/data'
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, filename)
+    else:
+        # Local development
+        return filename
+
+def get_db_path():
+    """Get persistent database path - CRITICAL FIX"""
+    return get_persistent_path('bfcinema.db')
+
+def get_upload_dir():
+    """Get persistent upload directory - CRITICAL FIX"""
+    upload_dir = get_persistent_path('uploads')
+    os.makedirs(upload_dir, exist_ok=True)
+    return upload_dir
+
+def get_temp_dir():
+    """Get persistent temp directory - CRITICAL FIX"""
+    temp_dir = get_persistent_path('temp_uploads')
+    os.makedirs(temp_dir, exist_ok=True)
+    return temp_dir
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -29,24 +66,21 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, static_folder='.', static_url_path='')
 
 # =========== RENDER-SPECIFIC CONFIGURATIONS ===========
-# Get environment variables for Render
 RENDER = os.getenv('RENDER', 'false').lower() == 'true'
 
-# Use environment variables for secrets (set these in Render dashboard)
 app.secret_key = os.getenv('SECRET_KEY', 'bfcinema_secret_key_2026_secure_12345_prod_change_me')
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 31536000  # 8760 hours (1 year)
+app.config['PERMANENT_SESSION_LIFETIME'] = 31536000  # 1 year
 
 app.config['MAX_CONTENT_LENGTH'] = 900 * 1024 * 1024  # 900MB
 
-# Configure CORS based on environment
+# Configure CORS
 if RENDER:
-    # Production settings for Render
+    # Production settings
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     
-    # Get Render external URL
     RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL', '')
     allowed_origins = [
         RENDER_EXTERNAL_URL,
@@ -58,7 +92,7 @@ if RENDER:
         'http://localhost:5500',
         'http://127.0.0.1:5500'
     ]
-    allowed_origins = [origin for origin in allowed_origins if origin]  # Remove empty strings
+    allowed_origins = [origin for origin in allowed_origins if origin]
 else:
     # Development settings
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -73,7 +107,7 @@ else:
         'http://127.0.0.1:5500'
     ]
 
-# Configure CORS properly
+# Configure CORS
 CORS(app, 
      origins=allowed_origins,
      supports_credentials=True,
@@ -82,7 +116,6 @@ CORS(app,
      expose_headers=['Content-Type', 'Authorization', 'Content-Range', 'Accept-Ranges', 'Content-Length'])
 
 # =========== BACKBLAZE B2 CONFIGURATION ===========
-# Use environment variables for Backblaze credentials (set these in Render dashboard)
 BACKBLAZE_CONFIG = {
     'key_id': os.getenv('BACKBLAZE_KEY_ID', '0033811f85f980c0000000001'),
     'application_key': os.getenv('BACKBLAZE_APPLICATION_KEY', 'K003ROCPq4vNmTQXZx9h4fZ0ozcFzVM'),
@@ -102,21 +135,21 @@ try:
     )
     logger.info("✅ Backblaze B2 S3 client initialized successfully")
     
-    # Test connection by listing buckets
+    # Test connection
     response = s3_client.list_buckets()
     logger.info(f"✅ Connected to Backblaze B2. Buckets: {[b['Name'] for b in response['Buckets']]}")
     
 except Exception as e:
     logger.error(f"❌ Failed to initialize Backblaze B2 S3 client: {str(e)}")
-    logger.info("⚠️ Using local storage fallback for testing")
 
-# =========== DATABASE INITIALIZATION ===========
+# =========== CRITICAL FIX: DATABASE INITIALIZATION ===========
 def init_db():
-    """Initialize database with all required tables"""
+    """Initialize database with all required tables - CRITICAL FIX"""
     try:
-        # Use Render's persistent disk path if available
-        db_path = '/tmp/bfcinema.db' if RENDER else 'bfcinema.db'
-        logger.info(f"Initializing database at: {db_path}")
+        db_path = get_db_path()
+        logger.info(f"📂 Initializing persistent database at: {db_path}")
+        logger.info(f"📁 Database file exists: {os.path.exists(db_path)}")
+        logger.info(f"📁 Database file size: {os.path.getsize(db_path) if os.path.exists(db_path) else 0} bytes")
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -124,8 +157,8 @@ def init_db():
         # Enable foreign keys
         cursor.execute("PRAGMA foreign_keys = ON")
         
-        # =========== CRITICAL: CREATE CORE TABLES ===========
-        # Movies table - UPDATED: Added expires_at column for auto-deletion
+        # =========== CREATE CORE TABLES ===========
+        # Movies table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS movies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,7 +170,7 @@ def init_db():
                 poster_key TEXT,
                 uploaded_by TEXT DEFAULT 'Admin',
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,  -- When movie should be automatically deleted
+                expires_at TIMESTAMP,
                 views INTEGER DEFAULT 0,
                 download_count INTEGER DEFAULT 0,
                 storage TEXT DEFAULT 'backblaze',
@@ -150,7 +183,7 @@ def init_db():
             )
         """)
         
-        # Users table - SIMPLIFIED VERSION (FIXES REGISTRATION ERROR)
+        # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,7 +200,7 @@ def init_db():
             )
         """)
         
-        # Transactions table - SIMPLIFIED VERSION (FIXES "Failed to load transactions")
+        # Transactions table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,7 +259,7 @@ def init_db():
             )
         """)
         
-        # User access table - CRITICAL: This controls permanent access
+        # User access table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_access (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,7 +275,7 @@ def init_db():
             )
         """)
         
-        # Create indexes for faster lookups
+        # Create indexes
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_code ON transactions(transaction_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_transactions ON transactions(user_id, created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_access ON user_access(user_id, movie_id, is_active)')
@@ -253,7 +286,6 @@ def init_db():
         admin_exists = cursor.fetchone()
         
         if not admin_exists:
-            # Create admin user - use environment variable for admin password
             admin_password = os.getenv('ADMIN_PASSWORD', 'ASGWG2@##...')
             password_hash = generate_password_hash(admin_password)
             cursor.execute('''
@@ -265,25 +297,25 @@ def init_db():
             logger.info("✅ Admin user already exists")
         
         conn.commit()
-        logger.info(f"✅ Database initialized successfully at: {db_path}")
+        conn.close()
+        
+        logger.info(f"✅ Database initialized successfully")
+        logger.info(f"📁 Database location: {db_path}")
+        logger.info(f"📁 Database size: {os.path.getsize(db_path)} bytes")
+        
+        return True
         
     except Exception as e:
         logger.error(f"❌ Database initialization error: {str(e)}")
         logger.error(traceback.format_exc())
-        raise e
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-# =========== IMMEDIATE FIX: FORCE DB INITIALIZATION ===========
-# This runs EVERY TIME the app starts to ensure tables exist
-init_db()
+        return False
 
 def get_db():
-    """Get database connection"""
-    db_path = '/tmp/bfcinema.db' if RENDER else 'bfcinema.db'
+    """Get database connection - CRITICAL FIX"""
+    db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 def row_to_dict(row):
@@ -292,6 +324,46 @@ def row_to_dict(row):
         return None
     return {key: row[key] for key in row.keys()}
 
+# =========== CRITICAL FIX: INITIALIZE ON STARTUP ===========
+print("="*60)
+print("🎬 B/F Cinema - Starting Database Initialization")
+print("="*60)
+
+# Create necessary directories
+os.makedirs(get_upload_dir(), exist_ok=True)
+os.makedirs(get_temp_dir(), exist_ok=True)
+
+# Initialize database
+if init_db():
+    print("✅ Database initialized successfully")
+else:
+    print("❌ Database initialization failed")
+
+print(f"📁 Database: {get_db_path()}")
+print(f"📁 Uploads: {get_upload_dir()}")
+print(f"📁 Temp: {get_temp_dir()}")
+print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
+print("="*60)
+
+# =========== BACKUP DATABASE FUNCTION ===========
+def backup_database():
+    """Create database backup"""
+    try:
+        source_path = get_db_path()
+        if os.path.exists(source_path):
+            backup_path = f"{source_path}.backup"
+            shutil.copy2(source_path, backup_path)
+            logger.info(f"📁 Database backed up to: {backup_path}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"❌ Backup failed: {str(e)}")
+        return False
+
+# Create initial backup
+backup_database()
+
+# =========== HELPER FUNCTIONS ===========
 def generate_presigned_url(key, expires=7200):
     """Generate presigned URL with proper content type for videos"""
     if not s3_client or not key:
@@ -337,7 +409,7 @@ def generate_presigned_url(key, expires=7200):
                 'Bucket': BACKBLAZE_CONFIG['bucket'],
                 'Key': key,
                 'ResponseContentType': content_type,
-                'ResponseContentDisposition': 'inline',  # Important for browser playback
+                'ResponseContentDisposition': 'inline',
                 'ResponseCacheControl': 'max-age=7200, public'
             },
             ExpiresIn=expires,
@@ -349,7 +421,6 @@ def generate_presigned_url(key, expires=7200):
         
     except Exception as e:
         logger.error(f"❌ Presigned URL error for key {key}: {str(e)}")
-        logger.error(traceback.format_exc())
         return None
 
 def generate_s3_public_url(key):
@@ -357,25 +428,22 @@ def generate_s3_public_url(key):
     if not key:
         return None
     
-    # Backblaze B2 public URL format
     endpoint = BACKBLAZE_CONFIG['endpoint']
     bucket = BACKBLAZE_CONFIG['bucket']
     
-    # Extract the host from endpoint
     if 'backblazeb2.com' in endpoint:
-        # Format: https://bucket.s3.region.backblazeb2.com/key
-        # Extract region from endpoint
         import re
         match = re.search(r'https://s3\.(.+?)\.backblazeb2\.com', endpoint)
         if match:
             region = match.group(1)
             return f"https://{bucket}.s3.{region}.backblazeb2.com/{key}"
     
-    # Fallback to simpler format
     return f"{endpoint}/file/{bucket}/{key}"
 
 def log_activity(user_id, user_email, action, details=None):
     """Log user activity"""
+    conn = None
+    cursor = None
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -388,27 +456,33 @@ def log_activity(user_id, user_email, action, details=None):
         ''', (str(user_id), user_email, action, details_str))
         
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Activity log error: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== AUTO-DELETION FUNCTIONS ===========
 def calculate_expiry_date():
     """Calculate expiry date 10 months from now"""
-    return datetime.now() + timedelta(days=300)  # Approximately 10 months (30 days * 10)
+    return datetime.now() + timedelta(days=300)
 
 def delete_expired_movies():
     """Delete movies that have passed their expiry date"""
+    deleted_count = 0
+    conn = None
+    cursor = None
+    
     try:
         logger.info("🔍 Checking for expired movies to delete...")
         
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get current timestamp
         now = datetime.now()
         
-        # Find movies that have expired (expires_at < now and is_active = 1)
         cursor.execute('''
             SELECT id, title, video_key, poster_key, uploaded_at, expires_at 
             FROM movies 
@@ -432,11 +506,9 @@ def delete_expired_movies():
                 # Delete from Backblaze B2 if available
                 if s3_client and movie_dict['video_key']:
                     try:
-                        # Delete video file
                         s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['video_key'])
                         logger.info(f"✅ Deleted video from Backblaze B2: {movie_dict['video_key']}")
                         
-                        # Delete poster if exists
                         if movie_dict.get('poster_key'):
                             s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['poster_key'])
                             logger.info(f"✅ Deleted poster from Backblaze B2: {movie_dict['poster_key']}")
@@ -457,34 +529,32 @@ def delete_expired_movies():
                 })
             
             conn.commit()
-            logger.info(f"✅ Successfully deleted {len(expired_movies)} expired movies")
+            deleted_count = len(expired_movies)
+            logger.info(f"✅ Successfully deleted {deleted_count} expired movies")
         else:
             logger.info("✅ No expired movies found")
         
-        conn.close()
-        return len(expired_movies)
-        
     except Exception as e:
         logger.error(f"❌ Error deleting expired movies: {str(e)}")
-        logger.error(traceback.format_exc())
-        return 0
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+    
+    return deleted_count
 
 def schedule_auto_deletion():
     """Schedule automatic deletion of expired movies"""
     try:
-        # Run deletion check daily at 2 AM
         schedule.every().day.at("02:00").do(delete_expired_movies)
-        
-        # Also run immediately on startup
         delete_expired_movies()
-        
         logger.info("✅ Auto-deletion scheduler started")
         
-        # Run the scheduler in a separate thread
         def run_scheduler():
             while True:
                 schedule.run_pending()
-                time.sleep(60)  # Check every minute
+                time.sleep(60)
         
         scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
         scheduler_thread.start()
@@ -492,15 +562,13 @@ def schedule_auto_deletion():
     except Exception as e:
         logger.error(f"❌ Error starting auto-deletion scheduler: {str(e)}")
 
-# =========== NEW HELPER FUNCTIONS ===========
+# =========== MPESA FUNCTIONS ===========
 def parse_mpesa_message(message):
-    """Parse MPesa message to extract transaction details - EXACT format for PETER KINUTHIA NGIGI"""
+    """Parse MPesa message to extract transaction details"""
     try:
-        # Clean the message
         message = ' '.join(message.strip().split())
         
         # Exact pattern for MPesa confirmation message
-        # Format: UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 AM.New M-PESA balance is Ksh1,230.00.
         pattern = r'([A-Z0-9]{10})\s+Confirmed\.\s+Ksh?([\d,]+\.\d{2})\s+(?:paid\s+to|sent\s+to)\s+PETER\s+KINUTHIA\s+NGIGI\.\s+on\s+(\d{1,2}/\d{1,2}/\d{2})\s+at\s+(\d{1,2}:\d{2}\s+[AP]M)\.'
         
         match = re.search(pattern, message, re.IGNORECASE)
@@ -516,12 +584,11 @@ def parse_mpesa_message(message):
                 'raw_message': message
             }
         
-        # Alternative pattern with different spacing
+        # Alternative pattern
         pattern2 = r'([A-Z0-9]{10})\s+Confirmed\.\s+Ksh?([\d,]+\.\d{2})\s+(?:paid\s+to|sent\s+to)\s+PETER\s+KINUTHIA\s+NGIGI\.'
         match2 = re.search(pattern2, message, re.IGNORECASE)
         
         if match2:
-            # Try to extract date and time
             date_pattern = r'on\s+(\d{1,2}/\d{1,2}/\d{2})\s+at\s+(\d{1,2}:\d{2}\s+[AP]M)'
             date_match = re.search(date_pattern, message, re.IGNORECASE)
             
@@ -546,12 +613,11 @@ def parse_mpesa_message(message):
                     'raw_message': message
                 }
         
-        # Check for valid transaction code and amount even if format isn't perfect
+        # Check for valid transaction code and amount
         fallback_pattern = r'([A-Z0-9]{10}).*?Ksh?([\d,]+\.\d{2})'
         fallback_match = re.search(fallback_pattern, message, re.IGNORECASE)
         
         if fallback_match:
-            # Check if contains the business name
             if "PETER KINUTHIA NGIGI".lower() in message.lower():
                 return {
                     'transaction_code': fallback_match.group(1).upper(),
@@ -563,36 +629,30 @@ def parse_mpesa_message(message):
                     'raw_message': message
                 }
         
-        return {'is_valid': False, 'error': 'Invalid MPesa message format. Must contain: Transaction code, amount (KES 30.00), and "PETER KINUTHIA NGIGI"'}
+        return {'is_valid': False, 'error': 'Invalid MPesa message format'}
     
     except Exception as e:
         logger.error(f"MPesa parse error: {str(e)}")
         return {'is_valid': False, 'error': f'Error parsing message: {str(e)}'}
 
 def generate_receipt_qr(data):
-    """Generate QR code without PIL dependency"""
+    """Generate QR code"""
     try:
-        # Try using segno instead (pure Python, no PIL)
-        import segno
-        import base64
-        from io import BytesIO
-        
-        # Create QR code
-        qrcode = segno.make(data, error='L')
-        
-        # Save to buffer
-        buffer = BytesIO()
-        qrcode.save(buffer, kind='svg', scale=5)
-        buffer.seek(0)
-        
-        # Convert to base64
-        svg_data = buffer.read().decode('utf-8')
-        b64_str = base64.b64encode(svg_data.encode()).decode()
-        return f"data:image/svg+xml;base64,{b64_str}"
-        
-    except ImportError:
-        # If segno not available, use simple SVG
-        return generate_simple_qr(data)
+        if QR_AVAILABLE:
+            import segno
+            import base64
+            from io import BytesIO
+            
+            qrcode = segno.make(data, error='L')
+            buffer = BytesIO()
+            qrcode.save(buffer, kind='svg', scale=5)
+            buffer.seek(0)
+            
+            svg_data = buffer.read().decode('utf-8')
+            b64_str = base64.b64encode(svg_data.encode()).decode()
+            return f"data:image/svg+xml;base64,{b64_str}"
+        else:
+            return generate_simple_qr(data)
     except Exception as e:
         logger.error(f"QR generation error: {str(e)}")
         return generate_simple_qr(data)
@@ -601,7 +661,6 @@ def generate_simple_qr(data):
     """Generate simple SVG without QR code"""
     import base64
     
-    # Create a simple receipt SVG
     svg_template = f'''<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
         <rect width="200" height="200" fill="#f8f9fa"/>
         <rect x="20" y="20" width="160" height="160" fill="white" stroke="#e50914" stroke-width="2"/>
@@ -624,12 +683,22 @@ def generate_simple_qr(data):
 
 def check_transaction_code_unique(transaction_code):
     """Check if transaction code is unique"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM transactions WHERE transaction_code = ?', (transaction_code,))
-    exists = cursor.fetchone() is not None
-    conn.close()
-    return not exists
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM transactions WHERE transaction_code = ?', (transaction_code,))
+        exists = cursor.fetchone() is not None
+        return not exists
+    except Exception as e:
+        logger.error(f"Check transaction error: {str(e)}")
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== ACCESS CONTROL FUNCTIONS ===========
 def has_movie_access(user_id, movie_id):
@@ -637,38 +706,43 @@ def has_movie_access(user_id, movie_id):
     if not user_id:
         return False
     
-    # Admin has access to everything
     if user_id == 'admin_001':
         return True
     
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    # Check if user has purchased access (PERMANENT ACCESS)
-    cursor.execute('''
-        SELECT 1 FROM user_access 
-        WHERE user_id = ? AND movie_id = ? AND is_active = 1
-        LIMIT 1
-    ''', (user_id, movie_id))
-    
-    has_access = cursor.fetchone() is not None
-    
-    # Check if movie has free preview
-    if not has_access:
-        cursor.execute('SELECT free_preview FROM movies WHERE id = ?', (movie_id,))
-        movie = cursor.fetchone()
-        if movie and movie['free_preview']:
-            has_access = True
-    
-    conn.close()
-    
-    return has_access
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT 1 FROM user_access 
+            WHERE user_id = ? AND movie_id = ? AND is_active = 1
+            LIMIT 1
+        ''', (user_id, movie_id))
+        
+        has_access = cursor.fetchone() is not None
+        
+        if not has_access:
+            cursor.execute('SELECT free_preview FROM movies WHERE id = ?', (movie_id,))
+            movie = cursor.fetchone()
+            if movie and movie['free_preview']:
+                has_access = True
+        
+        return has_access
+    except Exception as e:
+        logger.error(f"Access check error: {str(e)}")
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== CORS MIDDLEWARE ===========
 @app.after_request
 def after_request(response):
     """Add CORS headers to all responses"""
-    # Add CORS headers
     origin = request.headers.get('Origin', '')
     if origin in allowed_origins or '*':
         response.headers.add('Access-Control-Allow-Origin', origin)
@@ -677,13 +751,11 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH')
     response.headers.add('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
     
-    # Video-specific headers
     response.headers.add('Accept-Ranges', 'bytes')
     response.headers.add('Cache-Control', 'no-cache, no-store, must-revalidate')
     response.headers.add('Pragma', 'no-cache')
     response.headers.add('Expires', '0')
     
-    # Security headers for production
     if RENDER:
         response.headers.add('X-Content-Type-Options', 'nosniff')
         response.headers.add('X-Frame-Options', 'SAMEORIGIN')
@@ -704,7 +776,6 @@ def before_request():
         response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH')
         return response, 200
     
-    # Log request in production
     if RENDER and request.path.startswith('/api/'):
         logger.info(f"{request.method} {request.path} - {request.remote_addr}")
 
@@ -712,6 +783,8 @@ def before_request():
 @app.route('/api/upload-file', methods=['POST'])
 def upload_file():
     """Simple file upload endpoint"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -725,11 +798,8 @@ def upload_file():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        # Save to temp directory
-        temp_dir = 'temp_uploads'
-        if RENDER:
-            temp_dir = '/tmp/temp_uploads'  # Use Render's temp directory
-        
+        # Save to persistent temp directory
+        temp_dir = get_temp_dir()
         os.makedirs(temp_dir, exist_ok=True)
         
         # Generate unique filename
@@ -739,6 +809,8 @@ def upload_file():
         filepath = os.path.join(temp_dir, filename)
         
         file.save(filepath)
+        
+        logger.info(f"✅ File uploaded: {filename} to {temp_dir}")
         
         return jsonify({
             'success': True,
@@ -751,10 +823,17 @@ def upload_file():
     except Exception as e:
         logger.error(f"File upload error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/upload-movie-complete', methods=['POST'])
 def upload_movie_complete():
     """Complete movie upload after all files are uploaded"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -770,9 +849,7 @@ def upload_movie_complete():
         if not title:
             return jsonify({'success': False, 'error': 'Title is required'}), 400
         
-        temp_dir = 'temp_uploads'
-        if RENDER:
-            temp_dir = '/tmp/temp_uploads'
+        temp_dir = get_temp_dir()
         
         video_path = os.path.join(temp_dir, video_filename) if video_filename else None
         poster_path = os.path.join(temp_dir, poster_filename) if poster_filename else None
@@ -802,7 +879,6 @@ def upload_movie_complete():
                 logger.info(f"Video uploaded to Backblaze B2: {video_key}")
             except Exception as e:
                 logger.error(f"Failed to upload to Backblaze B2: {str(e)}")
-                # Use fallback URL
                 video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         
         # Upload poster if exists
@@ -826,13 +902,9 @@ def upload_movie_complete():
                     logger.error(f"Failed to upload poster to Backblaze B2: {str(e)}")
                     poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
         
-        # Generate stream URL
         stream_url = f"/api/stream/{unique_id}"
-        
-        # Calculate expiry date (10 months from now)
         expiry_date = calculate_expiry_date()
         
-        # Save to database
         conn = get_db()
         cursor = conn.cursor()
         
@@ -855,7 +927,13 @@ def upload_movie_complete():
         
         movie_id = cursor.lastrowid
         conn.commit()
-        conn.close()
+        
+        log_activity(session['user_id'], session['email'], 'upload_movie', {
+            'title': title,
+            'movie_id': movie_id,
+            'video_url': video_url,
+            'expires_at': expiry_date.isoformat()
+        })
         
         # Cleanup temp files
         try:
@@ -865,13 +943,6 @@ def upload_movie_complete():
                 os.remove(poster_path)
         except:
             pass
-        
-        log_activity(session['user_id'], session['email'], 'upload_movie', {
-            'title': title,
-            'movie_id': movie_id,
-            'video_url': video_url,
-            'expires_at': expiry_date.isoformat()
-        })
         
         return jsonify({
             'success': True,
@@ -886,45 +957,45 @@ def upload_movie_complete():
     except Exception as e:
         logger.error(f"Complete upload error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Upload failed: ' + str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== VIDEO STREAMING ENDPOINTS ===========
 @app.route('/api/stream-video/<int:movie_id>', methods=['GET'])
 def stream_video_direct(movie_id):
-    """Get streaming URL for a movie - SIMPLIFIED VERSION"""
+    """Get streaming URL for a movie"""
+    conn = None
+    cursor = None
     try:
-        # Check access FIRST
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
-        # Get movie details
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
-        conn.close()
         
         if not movie:
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Check if movie is active
         if not movie_dict.get('is_active', 1):
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Generate presigned URL
         video_url = None
         if movie_dict['video_key']:
             video_url = generate_presigned_url(movie_dict['video_key'])
         
-        # If Backblaze B2 URL generation fails, use fallback
         if not video_url and movie_dict['s3_url']:
             video_url = movie_dict['s3_url']
         elif not video_url:
-            # Ultimate fallback
             video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         
         return jsonify({
@@ -937,24 +1008,27 @@ def stream_video_direct(movie_id):
     except Exception as e:
         logger.error(f"Stream video error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/stream/<movie_id>', methods=['GET'])
 def stream_movie_proxy(movie_id):
-    """Proxy stream for movie - handles byte range requests"""
+    """Proxy stream for movie"""
     try:
-        # Check access FIRST
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # Extract movie ID from stream URL if needed
         try:
             movie_id_int = int(movie_id)
         except:
-            # Try to find movie by video_key
             conn = get_db()
             cursor = conn.cursor()
             cursor.execute('SELECT id FROM movies WHERE video_key LIKE ?', (f'%{movie_id}%',))
             movie = cursor.fetchone()
+            cursor.close()
             conn.close()
             
             if movie:
@@ -965,49 +1039,41 @@ def stream_movie_proxy(movie_id):
         if not has_movie_access(session['user_id'], movie_id_int):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
-        # Get movie from database
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, file_type, is_active FROM movies WHERE id = ?', (movie_id_int,))
         movie = cursor.fetchone()
+        cursor.close()
         conn.close()
         
         if not movie or not movie['video_key']:
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
-        # Check if movie is active
         if not movie.get('is_active', 1):
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Generate presigned URL
         video_url = generate_presigned_url(movie['video_key'])
         if not video_url:
-            # Fallback to test video
             video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         
-        # Get range header for partial content support
         range_header = request.headers.get('Range', None)
         
         if range_header:
-            # Forward the range request
             headers = {'Range': range_header}
             response = requests.get(video_url, headers=headers, stream=True)
             
-            # Create Flask response with proper headers
             flask_response = Response(
                 response.iter_content(chunk_size=8192),
                 status=response.status_code,
                 content_type=response.headers.get('content-type', 'video/mp4')
             )
             
-            # Copy headers
             for key, value in response.headers.items():
                 if key.lower() in ['content-range', 'content-length', 'accept-ranges', 'content-type']:
                     flask_response.headers[key] = value
             
             return flask_response
         else:
-            # Simple redirect to the video URL
             return redirect(video_url, code=302)
             
     except Exception as e:
@@ -1017,31 +1083,28 @@ def stream_movie_proxy(movie_id):
 @app.route('/api/movies/<int:movie_id>/stream-url', methods=['GET'])
 def get_movie_stream_url(movie_id):
     """Get streaming URL for movie with access check"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # Check access using the proper function
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
-        # Get movie
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, file_type, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
-        conn.close()
         
         if not movie:
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Check if movie is active
         if not movie_dict.get('is_active', 1):
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Generate streaming URL
         video_url = None
         if movie_dict['video_key']:
             video_url = generate_presigned_url(movie_dict['video_key'])
@@ -1065,37 +1128,37 @@ def get_movie_stream_url(movie_id):
     except Exception as e:
         logger.error(f"Stream URL error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
-# =========== NEW: SIMPLE STREAMING ENDPOINT ===========
 @app.route('/api/simple-stream/<int:movie_id>', methods=['GET'])
 def simple_stream_movie(movie_id):
     """Simple streaming endpoint"""
+    conn = None
+    cursor = None
     try:
-        # Check authentication
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # Check access using the proper function
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
-        # Get movie
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, file_type, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
-        conn.close()
         
         if not movie:
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Check if movie is active
         if not movie_dict.get('is_active', 1):
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Generate streaming URL
         video_url = None
         if movie_dict['video_key']:
             video_url = generate_presigned_url(movie_dict['video_key'])
@@ -1106,7 +1169,6 @@ def simple_stream_movie(movie_id):
         if not video_url:
             video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         
-        # Generate stream URL
         stream_url = f"/api/stream/{movie_id}"
         
         return jsonify({
@@ -1115,34 +1177,38 @@ def simple_stream_movie(movie_id):
             'direct_url': video_url,
             'content_type': movie_dict['file_type'] or 'video/mp4',
             'movie_title': movie_dict['title'],
-            'can_watch': True  # Always true if user has access
+            'can_watch': True
         })
         
     except Exception as e:
         logger.error(f"Simple stream error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== DEBUG ENDPOINTS ===========
 @app.route('/api/debug/movie/<int:movie_id>', methods=['GET'])
 def debug_movie(movie_id):
     """Debug endpoint to check movie URLs"""
+    conn = None
+    cursor = None
     try:
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
-        conn.close()
         
         if not movie:
             return jsonify({'success': False, 'error': 'Movie not found'})
         
         movie_dict = row_to_dict(movie)
         
-        # Generate URLs
         video_url = generate_presigned_url(movie_dict['video_key'])
         poster_url = generate_presigned_url(movie_dict['poster_key'])
         
-        # Check if URLs are valid
         video_accessible = False
         if video_url:
             try:
@@ -1150,6 +1216,11 @@ def debug_movie(movie_id):
                 video_accessible = head_response.status_code == 200
             except:
                 video_accessible = False
+        
+        days_remaining = None
+        if movie_dict.get('expires_at'):
+            expiry_date = datetime.fromisoformat(movie_dict['expires_at'])
+            days_remaining = (expiry_date - datetime.now()).days
         
         return jsonify({
             'success': True,
@@ -1168,18 +1239,22 @@ def debug_movie(movie_id):
                 'is_active': bool(movie_dict.get('is_active', 1)),
                 'uploaded_at': movie_dict.get('uploaded_at'),
                 'expires_at': movie_dict.get('expires_at'),
-                'days_remaining': None if not movie_dict.get('expires_at') else (datetime.fromisoformat(movie_dict['expires_at']) - datetime.now()).days
+                'days_remaining': days_remaining
             },
             'backblaze_connected': s3_client is not None
         })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/test-video', methods=['GET'])
 def test_video():
-    """Test video endpoint with a sample video"""
-    # Return a public test video URL
+    """Test video endpoint"""
     test_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
     return jsonify({
         'success': True,
@@ -1190,12 +1265,13 @@ def test_video():
 @app.route('/api/test-video-playback/<int:movie_id>', methods=['GET'])
 def test_video_playback(movie_id):
     """Test video playback for a specific movie"""
+    conn = None
+    cursor = None
     try:
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
-        conn.close()
         
         if not movie:
             return jsonify({'success': False, 'error': 'Movie not found'})
@@ -1238,6 +1314,11 @@ def test_video_playback(movie_id):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== HEALTH & CONNECTION ENDPOINTS ===========
 @app.route('/health', methods=['GET'])
@@ -1259,11 +1340,8 @@ def test_backblaze_connection():
     """Test Backblaze B2 connection"""
     try:
         if s3_client:
-            # Try to list buckets to test connection
             response = s3_client.list_buckets()
             buckets = [bucket['Name'] for bucket in response['Buckets']]
-            
-            # Check if our bucket exists
             bucket_exists = BACKBLAZE_CONFIG['bucket'] in buckets
             
             return jsonify({
@@ -1285,10 +1363,69 @@ def test_backblaze_connection():
             'bucket_exists': False
         })
 
+# =========== NEW: SYSTEM CHECK ENDPOINT ===========
+@app.route('/api/debug/system-check', methods=['GET'])
+def system_check():
+    """Check if everything is working"""
+    try:
+        db_path = get_db_path()
+        upload_dir = get_upload_dir()
+        temp_dir = get_temp_dir()
+        
+        checks = {
+            'database_exists': os.path.exists(db_path),
+            'database_size': os.path.getsize(db_path) if os.path.exists(db_path) else 0,
+            'upload_dir_exists': os.path.exists(upload_dir),
+            'temp_dir_exists': os.path.exists(temp_dir),
+            'backblaze_connected': s3_client is not None,
+            'render_environment': RENDER,
+            'timestamp': datetime.now().isoformat(),
+            'database_path': db_path,
+            'upload_dir_path': upload_dir,
+            'temp_dir_path': temp_dir
+        }
+        
+        # Check if we can write to database
+        if os.path.exists(db_path):
+            try:
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) as count FROM sqlite_master')
+                result = cursor.fetchone()
+                checks['database_writable'] = True
+                checks['table_count'] = result['count']
+                
+                # Check each table
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+                table_info = []
+                for table in tables:
+                    table_name = table['name']
+                    cursor.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+                    count = cursor.fetchone()['count']
+                    table_info.append({
+                        'table': table_name,
+                        'row_count': count
+                    })
+                checks['tables'] = table_info
+                
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                checks['database_writable'] = False
+                checks['database_error'] = str(e)
+        
+        return jsonify({'success': True, 'checks': checks})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # =========== AUTHENTICATION ENDPOINTS ===========
 @app.route('/api/login', methods=['POST'])
 def login():
     """User login endpoint"""
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
         if not data:
@@ -1331,7 +1468,6 @@ def login():
         user = cursor.fetchone()
         
         if user and check_password_hash(user['password_hash'], password):
-            # Update last login
             cursor.execute('UPDATE users SET last_login = ? WHERE id = ?', (datetime.now(), user['id']))
             
             session.clear()
@@ -1342,7 +1478,6 @@ def login():
             session.permanent = True
             
             conn.commit()
-            conn.close()
             
             log_activity(user['id'], user['email'], 'user_login')
             
@@ -1357,16 +1492,22 @@ def login():
                 }
             })
         
-        conn.close()
         return jsonify({'success': False, 'error': 'Invalid email or password'}), 401
         
     except Exception as e:
         logger.error(f"Login error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/save-user', methods=['POST'])
 def save_user():
-    """User registration endpoint - FIXED VERSION"""
+    """User registration endpoint"""
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
         if not data:
@@ -1390,10 +1531,9 @@ def save_user():
         # Check if user already exists
         cursor.execute('SELECT * FROM users WHERE email = ? COLLATE NOCASE', (email,))
         if cursor.fetchone():
-            conn.close()
             return jsonify({'success': False, 'error': 'Email already registered'}), 400
         
-        # Create user - FIXED: This will work because users table is guaranteed to exist
+        # Create user
         password_hash = generate_password_hash(password)
         cursor.execute('''
             INSERT INTO users (name, email, phone, password_hash)
@@ -1405,7 +1545,6 @@ def save_user():
         log_activity(user_id, email, 'user_registration', {'name': name})
         
         conn.commit()
-        conn.close()
         
         return jsonify({
             'success': True,
@@ -1421,6 +1560,11 @@ def save_user():
     except Exception as e:
         logger.error(f"Registration error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Registration failed'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -1440,6 +1584,8 @@ def logout():
 @app.route('/api/check-auth', methods=['GET'])
 def check_auth():
     """Check if user is authenticated"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' in session:
             user_id = session['user_id']
@@ -1461,7 +1607,6 @@ def check_auth():
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
             user = cursor.fetchone()
-            conn.close()
             
             if user:
                 return jsonify({
@@ -1478,10 +1623,18 @@ def check_auth():
     except Exception as e:
         logger.error(f"Auth check error: {str(e)}")
         return jsonify({'authenticated': False})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== MOVIE ENDPOINTS ===========
 @app.route('/api/movies', methods=['GET'])
 def get_movies():
+    """Get all movies"""
+    conn = None
+    cursor = None
     try:
         user_id = session.get('user_id')
         
@@ -1489,17 +1642,14 @@ def get_movies():
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM movies WHERE is_active=1 ORDER BY uploaded_at DESC")
         rows = cursor.fetchall()
-        conn.close()
 
         results = []
         for row in rows:
             movie = row_to_dict(row)
             
-            # Generate URLs
             video_url = generate_presigned_url(movie.get('video_key'))
             poster_url = generate_presigned_url(movie.get('poster_key'))
             
-            # If Backblaze B2 fails, use fallback URLs
             if not video_url and movie.get('s3_url'):
                 video_url = movie.get('s3_url')
             if not video_url:
@@ -1508,15 +1658,12 @@ def get_movies():
             if not poster_url:
                 poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
             
-            # Check if user has access using the proper function
             has_access = has_movie_access(user_id, movie['id'])
             
-            # Get stream URL - use the stored one or generate
             stream_url = movie.get('stream_url')
             if not stream_url:
                 stream_url = f"/api/stream-video/{movie['id']}"
             
-            # Calculate days remaining until expiry
             days_remaining = None
             if movie.get('expires_at'):
                 expiry_date = datetime.fromisoformat(movie['expires_at'])
@@ -1528,8 +1675,8 @@ def get_movies():
                 'description': movie.get('description', 'No description'),
                 'year': movie.get('year'),
                 'duration': movie.get('duration'),
-                'url': video_url,  # Direct video URL
-                'stream_url': stream_url,  # API endpoint for streaming
+                'url': video_url,
+                'stream_url': stream_url,
                 'poster': poster_url,
                 'views': movie.get('views', 0),
                 'downloads': movie.get('download_count', 0),
@@ -1547,40 +1694,41 @@ def get_movies():
     except Exception as e:
         logger.error(f"Get movies error: {traceback.format_exc()}")
         return jsonify(success=False, error="Failed to load movies"), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/movies/<int:movie_id>/watch', methods=['POST'])
 def watch_movie(movie_id):
-    """Record movie watch - Users can watch unlimited times"""
+    """Record movie watch"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # First check if user has access
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
         conn = get_db()
         cursor = conn.cursor()
         
-        # Check if movie is active
         cursor.execute('SELECT is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie or not movie['is_active']:
-            conn.close()
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Increment movie views (unlimited watching)
         cursor.execute('UPDATE movies SET views = views + 1 WHERE id = ?', (movie_id,))
         
-        # Add to watch history (unlimited entries)
         cursor.execute('''
             INSERT INTO watch_history (user_id, movie_id, watched_at)
             VALUES (?, ?, ?)
         ''', (session['user_id'], movie_id, datetime.now()))
         
         conn.commit()
-        conn.close()
         
         log_activity(session['user_id'], session['email'], 'watch_movie', {'movie_id': movie_id})
         
@@ -1589,50 +1737,47 @@ def watch_movie(movie_id):
     except Exception as e:
         logger.error(f"Watch movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to record view'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/movies/<int:movie_id>/download', methods=['POST'])
 def download_movie(movie_id):
     """Record movie download"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session or session['user_id'] == 'admin_001':
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
-        # First check if user has access
         if not has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
         
         conn = get_db()
         cursor = conn.cursor()
         
-        # Check if movie is active
         cursor.execute('SELECT is_active FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie or not movie['is_active']:
-            conn.close()
             return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
         
-        # Get movie details
         cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie:
-            conn.close()
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Increment movie download count
         cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
-        
-        # Increment user's download count
         cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
         
-        # Generate URLs
         video_url = generate_presigned_url(movie_dict['video_key'])
         poster_url = generate_presigned_url(movie_dict.get('poster_key'))
         
-        # Add to downloads table
         movie_data = json.dumps({
             'id': movie_dict['id'],
             'title': movie_dict['title'],
@@ -1650,7 +1795,6 @@ def download_movie(movie_id):
         ''', (session['user_id'], movie_id, movie_data))
         
         conn.commit()
-        conn.close()
         
         log_activity(session['user_id'], session['email'], 'download_movie', {
             'movie_id': movie_id,
@@ -1662,60 +1806,75 @@ def download_movie(movie_id):
     except Exception as e:
         logger.error(f"Download movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to record download'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/movies/<int:movie_id>', methods=['GET'])
 def get_movie_details(movie_id):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM movies WHERE id=?", (movie_id,))
-    movie = cursor.fetchone()
-    conn.close()
+    """Get movie details"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM movies WHERE id=?", (movie_id,))
+        movie = cursor.fetchone()
 
-    if not movie:
-        return jsonify(success=False, error="Movie not found"), 404
-    
-    movie_dict = row_to_dict(movie)
+        if not movie:
+            return jsonify(success=False, error="Movie not found"), 404
+        
+        movie_dict = row_to_dict(movie)
 
-    # Generate URLs
-    video_url = generate_presigned_url(movie_dict['video_key'])
-    poster_url = generate_presigned_url(movie_dict.get('poster_key'))
-    
-    if not video_url and movie_dict.get('s3_url'):
-        video_url = movie_dict['s3_url']
-    
-    # Check access
-    user_id = session.get('user_id')
-    has_access = has_movie_access(user_id, movie_id)
-    
-    # Calculate days remaining until expiry
-    days_remaining = None
-    if movie_dict.get('expires_at'):
-        expiry_date = datetime.fromisoformat(movie_dict['expires_at'])
-        days_remaining = (expiry_date - datetime.now()).days
-    
-    return jsonify(success=True, movie={
-        'id': movie_dict['id'],
-        'title': movie_dict['title'],
-        'description': movie_dict.get('description', ''),
-        'year': movie_dict.get('year'),
-        'duration': movie_dict.get('duration'),
-        'url': video_url,
-        'stream_url': f"/api/stream-video/{movie_dict['id']}",
-        'poster': poster_url,
-        'views': movie_dict.get('views', 0),
-        'downloads': movie_dict.get('download_count', 0),
-        'free_preview': bool(movie_dict.get('free_preview', False)),
-        'is_active': bool(movie_dict.get('is_active', 1)),
-        'uploaded_at': movie_dict.get('uploaded_at'),
-        'expires_at': movie_dict.get('expires_at'),
-        'days_remaining': days_remaining,
-        'has_access': has_access
-    })
+        video_url = generate_presigned_url(movie_dict['video_key'])
+        poster_url = generate_presigned_url(movie_dict.get('poster_key'))
+        
+        if not video_url and movie_dict.get('s3_url'):
+            video_url = movie_dict['s3_url']
+        
+        user_id = session.get('user_id')
+        has_access = has_movie_access(user_id, movie_id)
+        
+        days_remaining = None
+        if movie_dict.get('expires_at'):
+            expiry_date = datetime.fromisoformat(movie_dict['expires_at'])
+            days_remaining = (expiry_date - datetime.now()).days
+        
+        return jsonify(success=True, movie={
+            'id': movie_dict['id'],
+            'title': movie_dict['title'],
+            'description': movie_dict.get('description', ''),
+            'year': movie_dict.get('year'),
+            'duration': movie_dict.get('duration'),
+            'url': video_url,
+            'stream_url': f"/api/stream-video/{movie_dict['id']}",
+            'poster': poster_url,
+            'views': movie_dict.get('views', 0),
+            'downloads': movie_dict.get('download_count', 0),
+            'free_preview': bool(movie_dict.get('free_preview', False)),
+            'is_active': bool(movie_dict.get('is_active', 1)),
+            'uploaded_at': movie_dict.get('uploaded_at'),
+            'expires_at': movie_dict.get('expires_at'),
+            'days_remaining': days_remaining,
+            'has_access': has_access
+        })
+    except Exception as e:
+        logger.error(f"Get movie details error: {str(e)}")
+        return jsonify(success=False, error="Failed to load movie"), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== PAYMENT ENDPOINTS ===========
 @app.route('/api/movies/<int:movie_id>/verify-payment', methods=['POST'])
 def verify_payment(movie_id):
     """Verify MPesa payment and grant access to movie"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -1729,11 +1888,9 @@ def verify_payment(movie_id):
         if not phone or not transaction_code or not mpesa_message:
             return jsonify({'success': False, 'error': 'All fields are required'}), 400
         
-        # Validate phone number format
         if not re.match(r'^254[17]\d{8}$', phone):
             return jsonify({'success': False, 'error': 'Invalid phone number format. Use format: 2547XXXXXXXX'}), 400
         
-        # Validate transaction code format (should be 10 alphanumeric chars)
         if not re.match(r'^[A-Z0-9]{10}$', transaction_code):
             return jsonify({'success': False, 'error': 'Transaction code must be 10 alphanumeric characters'}), 400
         
@@ -1743,40 +1900,33 @@ def verify_payment(movie_id):
         if not parsed['is_valid']:
             return jsonify({'success': False, 'error': parsed.get('error', 'Invalid MPesa message')}), 400
         
-        # Verify transaction code matches
         if parsed['transaction_code'] != transaction_code:
             return jsonify({'success': False, 'error': f'Transaction code mismatch. Message has: {parsed["transaction_code"]}, you entered: {transaction_code}'}), 400
         
-        # Verify amount is exactly KES 30.00 (allow small variations)
         amount = parsed['amount']
         if abs(amount - 30.00) > 0.01:
             return jsonify({'success': False, 'error': f'Amount must be KES 30.00. Received: KES {amount:.2f}'}), 400
         
-        # Verify recipient is correct
         if parsed['recipient'].upper() != "PETER KINUTHIA NGIGI":
             return jsonify({'success': False, 'error': f'Payment must be sent to PETER KINUTHIA NGIGI. Received: {parsed["recipient"]}'}), 400
         
-        # Check if transaction code is already used
         conn = get_db()
         cursor = conn.cursor()
+        
         cursor.execute('SELECT id FROM transactions WHERE transaction_code = ?', (transaction_code,))
         existing = cursor.fetchone()
         
         if existing:
-            conn.close()
             return jsonify({'success': False, 'error': 'This transaction code has already been used'}), 400
         
-        # Get movie details
         cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie:
-            conn.close()
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Save transaction - FIXED: transactions table is guaranteed to exist
         cursor.execute('''
             INSERT INTO transactions 
             (transaction_code, user_id, user_email, user_phone, movie_id, movie_title, 
@@ -1797,15 +1947,12 @@ def verify_payment(movie_id):
         
         transaction_id = cursor.lastrowid
         
-        # Grant PERMANENT access to movie (unlimited watching)
         cursor.execute('''
             INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
             VALUES (?, ?, ?, 1)
         ''', (session['user_id'], movie_id, transaction_id))
         
-        # =========== ADD MOVIE TO DOWNLOADS AUTOMATICALLY ===========
-        # Record the download immediately after payment
-        # Generate URLs
+        # ADD MOVIE TO DOWNLOADS AUTOMATICALLY
         video_url = generate_presigned_url(movie_dict['video_key'])
         poster_url = generate_presigned_url(movie_dict.get('poster_key'))
         
@@ -1826,10 +1973,8 @@ def verify_payment(movie_id):
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         ''', (session['user_id'], movie_id, movie_data))
         
-        # Update counters
         cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
         cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
-        # =========== END DOWNLOADS ADDITION ===========
         
         conn.commit()
         
@@ -1844,7 +1989,6 @@ def verify_payment(movie_id):
         transaction = cursor.fetchone()
         transaction_dict = row_to_dict(transaction)
         
-        # Generate QR code for receipt
         qr_code = generate_receipt_qr(f"""
         B/F Cinema Receipt
         Transaction: {transaction_code}
@@ -1871,8 +2015,6 @@ def verify_payment(movie_id):
             'movie_id': movie_id
         }
         
-        conn.close()
-        
         log_activity(session['user_id'], session['email'], 'payment_verified', {
             'movie_id': movie_id,
             'transaction_code': transaction_code,
@@ -1892,10 +2034,17 @@ def verify_payment(movie_id):
     except Exception as e:
         logger.error(f"Payment verification error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': f'Payment verification failed: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/transactions/<int:transaction_id>/receipt', methods=['GET'])
 def get_receipt(transaction_id):
     """Generate receipt for transaction"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -1903,7 +2052,6 @@ def get_receipt(transaction_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get transaction details with user info
         cursor.execute('''
             SELECT t.*, u.name as user_name, u.email, u.phone
             FROM transactions t
@@ -1914,12 +2062,10 @@ def get_receipt(transaction_id):
         transaction = cursor.fetchone()
         
         if not transaction:
-            conn.close()
             return jsonify({'success': False, 'error': 'Transaction not found'}), 404
         
         transaction_dict = row_to_dict(transaction)
         
-        # Generate QR code data
         qr_data = f"""
         B/F Cinema Receipt
         Transaction: {transaction_dict['transaction_code']}
@@ -1946,16 +2092,22 @@ def get_receipt(transaction_id):
             'receipt_id': f"BFR{transaction_id:06d}"
         }
         
-        conn.close()
         return jsonify({'success': True, 'receipt': receipt})
         
     except Exception as e:
         logger.error(f"Receipt generation error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Failed to generate receipt'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/transactions/<int:transaction_id>/download-receipt', methods=['GET'])
 def download_receipt_file(transaction_id):
     """Download receipt as PDF/text file"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -1963,7 +2115,6 @@ def download_receipt_file(transaction_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get transaction details
         cursor.execute('''
             SELECT t.*, u.name as user_name, u.email, m.title as movie_title
             FROM transactions t
@@ -1975,12 +2126,10 @@ def download_receipt_file(transaction_id):
         transaction = cursor.fetchone()
         
         if not transaction:
-            conn.close()
             return jsonify({'success': False, 'error': 'Transaction not found'}), 404
         
         transaction_dict = row_to_dict(transaction)
         
-        # Generate receipt text
         receipt_text = f"""
 B/F CINEMA - OFFICIAL RECEIPT
 {'='*50}
@@ -2015,17 +2164,12 @@ Phone: +254 700 505325
 Thank you for your purchase!
         """
         
-        conn.close()
-        
-        # Create a downloadable file
         from io import BytesIO
         
-        # Create text file
         output = BytesIO()
         output.write(receipt_text.encode('utf-8'))
         output.seek(0)
         
-        # Return as downloadable file
         return send_file(
             output,
             as_attachment=True,
@@ -2036,6 +2180,11 @@ Thank you for your purchase!
     except Exception as e:
         logger.error(f"Download receipt error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Failed to download receipt'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/movies/<int:movie_id>/check-access', methods=['GET'])
 def check_movie_access(movie_id):
@@ -2059,7 +2208,9 @@ def check_movie_access(movie_id):
 # =========== ADMIN FINANCE ENDPOINTS ===========
 @app.route('/api/admin/transactions', methods=['GET'])
 def get_all_transactions():
-    """Get all transactions for admin - FIXED VERSION"""
+    """Get all transactions for admin"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2067,7 +2218,6 @@ def get_all_transactions():
         conn = get_db()
         cursor = conn.cursor()
         
-        # FIXED: transactions table is guaranteed to exist
         cursor.execute('''
             SELECT t.*, u.name as user_name, u.email, u.phone
             FROM transactions t
@@ -2077,14 +2227,11 @@ def get_all_transactions():
         
         rows = cursor.fetchall()
         
-        # Calculate statistics
         cursor.execute('SELECT COUNT(*) as total, SUM(amount) as revenue FROM transactions WHERE status = "verified"')
         stats = cursor.fetchone()
         
         cursor.execute('SELECT COUNT(*) as fraud FROM transactions WHERE status = "fraudulent"')
         fraud_stats = cursor.fetchone()
-        
-        conn.close()
         
         transaction_list = []
         for row in rows:
@@ -2121,10 +2268,17 @@ def get_all_transactions():
     except Exception as e:
         logger.error(f"Get transactions error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load transactions'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/admin/transactions/<int:transaction_id>/mark-fraudulent', methods=['POST'])
 def mark_transaction_fraudulent(transaction_id):
     """Mark transaction as fraudulent and terminate user"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2135,34 +2289,28 @@ def mark_transaction_fraudulent(transaction_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get transaction details
         cursor.execute('SELECT * FROM transactions WHERE id = ?', (transaction_id,))
         transaction = cursor.fetchone()
         
         if not transaction:
-            conn.close()
             return jsonify({'success': False, 'error': 'Transaction not found'}), 404
         
         transaction_dict = row_to_dict(transaction)
         
-        # Mark transaction as fraudulent
         cursor.execute('''
             UPDATE transactions 
             SET status = 'fraudulent' 
             WHERE id = ?
         ''', (transaction_id,))
         
-        # Revoke access
         cursor.execute('''
             DELETE FROM user_access 
             WHERE transaction_id = ?
         ''', (transaction_id,))
         
-        # Delete user account (terminate)
         cursor.execute('DELETE FROM users WHERE id = ?', (transaction_dict['user_id'],))
         
         conn.commit()
-        conn.close()
         
         log_activity(session['user_id'], session['email'], 'transaction_marked_fraudulent', {
             'transaction_id': transaction_id,
@@ -2175,189 +2323,18 @@ def mark_transaction_fraudulent(transaction_id):
     except Exception as e:
         logger.error(f"Mark fraudulent error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to mark as fraudulent'}), 500
-
-# =========== UPLOAD OPTIMIZATION ENDPOINTS ===========
-@app.route('/api/upload-chunk', methods=['POST'])
-def upload_chunk():
-    """Upload file in chunks for better performance"""
-    try:
-        if not session.get('is_admin'):
-            return jsonify({'success': False, 'error': 'Admin access required'}), 403
-        
-        chunk = request.files.get('chunk')
-        chunk_number = int(request.form.get('chunkNumber', 0))
-        total_chunks = int(request.form.get('totalChunks', 1))
-        filename = request.form.get('filename')
-        file_type = request.form.get('fileType')  # 'poster' or 'movie'
-        original_size = int(request.form.get('originalSize', 0))
-        
-        if not chunk:
-            return jsonify({'success': False, 'error': 'No chunk provided'}), 400
-        
-        # Store chunk temporarily
-        temp_dir = 'temp_uploads'
-        if RENDER:
-            temp_dir = '/tmp/temp_uploads'
-        
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        chunk_filename = f"{filename}_chunk_{chunk_number}"
-        chunk_path = os.path.join(temp_dir, chunk_filename)
-        chunk.save(chunk_path)
-        
-        # Return progress
-        progress = ((chunk_number + 1) / total_chunks) * 100
-        
-        return jsonify({
-            'success': True,
-            'chunk': chunk_number,
-            'progress': progress,
-            'message': f'Chunk {chunk_number + 1}/{total_chunks} uploaded'
-        })
-        
-    except Exception as e:
-        logger.error(f"Chunk upload error: {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Chunk upload failed'}), 500
-
-@app.route('/api/complete-upload', methods=['POST'])
-def complete_upload():
-    """Combine chunks and upload to Backblaze B2"""
-    try:
-        if not session.get('is_admin'):
-            return jsonify({'success': False, 'error': 'Admin access required'}), 403
-        
-        data = request.get_json()
-        title = data.get('title', '').strip()
-        description = data.get('description', '').strip()
-        year = data.get('year')
-        duration = data.get('duration')
-        filename = data.get('filename')
-        poster_filename = data.get('posterFilename')
-        
-        if not title or not filename:
-            return jsonify({'success': False, 'error': 'Title and filename are required'}), 400
-        
-        temp_dir = 'temp_uploads'
-        if RENDER:
-            temp_dir = '/tmp/temp_uploads'
-        
-        # Combine movie chunks
-        movie_chunks = sorted([f for f in os.listdir(temp_dir) if f.startswith(f"{filename}_chunk_")])
-        movie_path = os.path.join(temp_dir, f"combined_{filename}")
-        
-        with open(movie_path, 'wb') as outfile:
-            for chunk_file in movie_chunks:
-                with open(os.path.join(temp_dir, chunk_file), 'rb') as infile:
-                    outfile.write(infile.read())
-        
-        # Combine poster chunks if exists
-        poster_path = None
-        if poster_filename:
-            poster_chunks = sorted([f for f in os.listdir(temp_dir) if f.startswith(f"{poster_filename}_chunk_")])
-            if poster_chunks:
-                poster_path = os.path.join(temp_dir, f"combined_{poster_filename}")
-                with open(poster_path, 'wb') as outfile:
-                    for chunk_file in poster_chunks:
-                        with open(os.path.join(temp_dir, chunk_file), 'rb') as infile:
-                            outfile.write(infile.read())
-        
-        # Upload to Backblaze B2
-        unique_id = str(uuid.uuid4())[:8]
-        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-        
-        # Upload movie
-        video_ext = os.path.splitext(filename)[1].lower() or '.mp4'
-        video_key = f"movies/{unique_id}_{safe_title}{video_ext}"
-        
-        video_url = None
-        if s3_client:
-            with open(movie_path, 'rb') as f:
-                s3_client.upload_fileobj(
-                    f,
-                    BACKBLAZE_CONFIG['bucket'],
-                    video_key,
-                    ExtraArgs={'ContentType': 'video/mp4'}
-                )
-            video_url = generate_presigned_url(video_key)
-        
-        # Upload poster
-        poster_key = None
-        poster_url = None
-        if poster_path and os.path.exists(poster_path):
-            poster_ext = os.path.splitext(poster_filename)[1].lower() or '.jpg'
-            poster_key = f"posters/{unique_id}_{safe_title}{poster_ext}"
-            
-            if s3_client:
-                with open(poster_path, 'rb') as f:
-                    s3_client.upload_fileobj(
-                        f,
-                        BACKBLAZE_CONFIG['bucket'],
-                        poster_key,
-                        ExtraArgs={'ContentType': 'image/jpeg'}
-                    )
-                poster_url = generate_presigned_url(poster_key)
-        
-        # Generate stream URL
-        stream_url = f"/api/stream/{unique_id}"
-        
-        # Calculate expiry date (10 months from now)
-        expiry_date = calculate_expiry_date()
-        
-        # Save to database
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        file_size = os.path.getsize(movie_path) if os.path.exists(movie_path) else 0
-        
-        cursor.execute("""
-            INSERT INTO movies (
-                title, description, year, duration,
-                video_key, poster_key,
-                uploaded_by, uploaded_at, expires_at,
-                views, download_count, storage,
-                file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?)
-        """, (
-            title, description, year, duration, 
-            video_key, poster_key, session.get('name', 'Admin'),
-            expiry_date,
-            file_size, 'video/mp4', video_url, stream_url
-        ))
-        
-        movie_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        # Cleanup temp files
-        for f in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, f))
-            except:
-                pass
-        
-        log_activity(session['user_id'], session['email'], 'upload_movie_chunked', {
-            'title': title,
-            'movie_id': movie_id,
-            'expires_at': expiry_date.isoformat()
-        })
-        
-        return jsonify({
-            'success': True,
-            'message': 'Movie uploaded successfully',
-            'movie_id': movie_id,
-            'video_url': video_url,
-            'stream_url': stream_url,
-            'expires_at': expiry_date.isoformat()
-        })
-        
-    except Exception as e:
-        logger.error(f"Complete upload error: {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Upload completion failed'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== ADMIN ENDPOINTS ===========
 @app.route('/api/admin/stats', methods=['GET'])
 def get_admin_stats():
     """Get admin statistics"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2365,7 +2342,6 @@ def get_admin_stats():
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get counts
         cursor.execute('SELECT COUNT(*) FROM movies WHERE is_active = 1')
         total_movies = cursor.fetchone()[0]
         
@@ -2375,16 +2351,13 @@ def get_admin_stats():
         cursor.execute('SELECT COUNT(*) FROM downloads')
         total_downloads = cursor.fetchone()[0]
         
-        # Get expired movies count
         cursor.execute('SELECT COUNT(*) FROM movies WHERE expires_at < ? AND is_active = 1', (datetime.now(),))
         expired_movies = cursor.fetchone()[0]
         
-        # Calculate storage used (estimate)
         cursor.execute('SELECT SUM(file_size) FROM movies WHERE is_active = 1')
         total_size = cursor.fetchone()[0] or 0
         storage_used_gb = round(total_size / (1024 * 1024 * 1024), 2)
         
-        # Get recent activity
         cursor.execute('''
             SELECT * FROM activity_log 
             ORDER BY timestamp DESC 
@@ -2407,8 +2380,6 @@ def get_admin_stats():
                 'details': details
             })
         
-        conn.close()
-        
         return jsonify({
             'success': True,
             'stats': {
@@ -2424,15 +2395,21 @@ def get_admin_stats():
     except Exception as e:
         logger.error(f"Admin stats error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load stats'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/admin/upload-movie', methods=['POST'])
 def upload_movie():
     """Upload movie to Backblaze B2"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
         
-        # Get form data
         title = request.form.get('title', '').strip()
         description = request.form.get('description', '').strip()
         year = request.form.get('year')
@@ -2442,7 +2419,6 @@ def upload_movie():
         poster_file = request.files.get('poster')
         video_file = request.files.get('movie')
         
-        # Validation
         if not title:
             return jsonify({'success': False, 'error': 'Title is required'}), 400
         
@@ -2451,29 +2427,22 @@ def upload_movie():
         
         logger.info(f"Starting upload for: {title}")
         
-        # Check file size
         video_size = len(video_file.read())
-        video_file.seek(0)  # Reset file pointer
+        video_file.seek(0)
         
-        # Get uploaded_by from session
         uploaded_by = session.get('name', 'Admin')
         
-        # Upload to Backblaze B2
         if s3_client:
             try:
-                # Generate unique filenames
                 unique_id = str(uuid.uuid4())[:8]
                 safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
                 
-                # Get file extension
                 video_ext = os.path.splitext(video_file.filename)[1].lower()
                 if video_ext == '':
                     video_ext = '.mp4'
                 
-                # Get file type
                 file_type = 'video/mp4' if video_ext == '.mp4' else f'video/{video_ext[1:]}'
                 
-                # Upload video
                 video_key = f"movies/{unique_id}_{safe_title}{video_ext}"
                 logger.info(f"Uploading video to Backblaze B2: {video_key}")
                 
@@ -2484,10 +2453,8 @@ def upload_movie():
                     ExtraArgs={'ContentType': file_type}
                 )
                 
-                # Generate video URL
                 video_url = generate_presigned_url(video_key)
                 
-                # Upload poster if provided
                 poster_key = None
                 poster_url = None
                 
@@ -2508,17 +2475,12 @@ def upload_movie():
                     
                     poster_url = generate_presigned_url(poster_key)
                 else:
-                    # Use default poster
                     poster_key = f"posters/default_{unique_id}.jpg"
                     poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
                 
-                # Generate stream URL
                 stream_url = f"/api/stream/{unique_id}"
-                
-                # Calculate expiry date (10 months from now)
                 expiry_date = calculate_expiry_date()
                 
-                # Save to database
                 conn = get_db()
                 cursor = conn.cursor()
                 
@@ -2540,7 +2502,6 @@ def upload_movie():
                 movie_id = cursor.lastrowid
                 
                 conn.commit()
-                conn.close()
                 
                 log_activity(session['user_id'], session['email'], 'upload_movie', {
                     'title': title,
@@ -2570,18 +2531,15 @@ def upload_movie():
                 logger.error(f"Backblaze B2 upload error: {traceback.format_exc()}")
                 return jsonify({'success': False, 'error': f'Backblaze B2 upload failed: {str(e)}'}), 500
         else:
-            # Backblaze B2 client not available - use fallback
             logger.warning("Backblaze B2 client not available, using fallback URLs")
             
             video_key = f"fallback_movies/{title.replace(' ', '_')}.mp4"
             poster_key = f"fallback_posters/{title.replace(' ', '_')}.jpg"
             
-            # Use test video URL
             video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
             poster_url = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"
             stream_url = f"/api/stream/{title.replace(' ', '_')}"
             
-            # Calculate expiry date (10 months from now)
             expiry_date = calculate_expiry_date()
             
             conn = get_db()
@@ -2605,7 +2563,6 @@ def upload_movie():
             movie_id = cursor.lastrowid
             
             conn.commit()
-            conn.close()
             
             log_activity(session['user_id'], session['email'], 'upload_movie', {
                 'title': title,
@@ -2632,10 +2589,17 @@ def upload_movie():
     except Exception as e:
         logger.error(f"Upload movie error: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Upload failed: ' + str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/admin/movies/<int:movie_id>', methods=['DELETE'])
 def delete_movie(movie_id):
     """Delete movie from Backblaze B2 and database"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2643,17 +2607,14 @@ def delete_movie(movie_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get movie details
         cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
         movie = cursor.fetchone()
         
         if not movie:
-            conn.close()
             return jsonify({'success': False, 'error': 'Movie not found'}), 404
         
         movie_dict = row_to_dict(movie)
         
-        # Delete from Backblaze B2 if available
         if s3_client and movie_dict['video_key']:
             try:
                 s3_client.delete_object(Bucket=BACKBLAZE_CONFIG['bucket'], Key=movie_dict['video_key'])
@@ -2664,10 +2625,8 @@ def delete_movie(movie_id):
             except Exception as e:
                 logger.warning(f"Failed to delete from Backblaze B2: {str(e)}")
         
-        # Delete from database
         cursor.execute('DELETE FROM movies WHERE id = ?', (movie_id,))
         conn.commit()
-        conn.close()
         
         log_activity(session['user_id'], session['email'], 'delete_movie', {
             'movie_id': movie_id,
@@ -2679,10 +2638,17 @@ def delete_movie(movie_id):
     except Exception as e:
         logger.error(f"Delete movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to delete movie'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/admin/movies', methods=['GET'])
 def get_admin_movies():
     """Get all movies for admin"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2692,20 +2658,17 @@ def get_admin_movies():
         
         cursor.execute('SELECT * FROM movies ORDER BY uploaded_at DESC')
         rows = cursor.fetchall()
-        conn.close()
         
         movie_list = []
         for row in rows:
             movie = row_to_dict(row)
             
-            # Generate URLs
             video_url = generate_presigned_url(movie.get('video_key'))
             poster_url = generate_presigned_url(movie.get('poster_key'))
             
             if not video_url and movie.get('s3_url'):
                 video_url = movie.get('s3_url')
             
-            # Calculate days remaining until expiry
             days_remaining = None
             if movie.get('expires_at'):
                 expiry_date = datetime.fromisoformat(movie['expires_at'])
@@ -2739,8 +2702,12 @@ def get_admin_movies():
     except Exception as e:
         logger.error(f"Get admin movies error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load movies'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
-# =========== NEW: MANUAL DELETE EXPIRED MOVIES ENDPOINT ===========
 @app.route('/api/admin/delete-expired-movies', methods=['POST'])
 def manual_delete_expired_movies():
     """Manually trigger deletion of expired movies (Admin only)"""
@@ -2763,6 +2730,8 @@ def manual_delete_expired_movies():
 @app.route('/api/admin/users', methods=['GET'])
 def get_admin_users():
     """Get all users for admin"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2778,7 +2747,6 @@ def get_admin_users():
         ''')
         
         rows = cursor.fetchall()
-        conn.close()
         
         user_list = []
         for row in rows:
@@ -2799,10 +2767,17 @@ def get_admin_users():
     except Exception as e:
         logger.error(f"Get users error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load users'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
     """Delete user"""
+    conn = None
+    cursor = None
     try:
         if not session.get('is_admin'):
             return jsonify({'success': False, 'error': 'Admin access required'}), 403
@@ -2813,20 +2788,16 @@ def delete_user(user_id):
         conn = get_db()
         cursor = conn.cursor()
         
-        # Get user details for logging
         cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
         user = cursor.fetchone()
         
         if not user:
-            conn.close()
             return jsonify({'success': False, 'error': 'User not found'}), 404
         
         user_dict = row_to_dict(user)
         
-        # Delete user
         cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
         conn.commit()
-        conn.close()
         
         log_activity(session['user_id'], session['email'], 'delete_user', {
             'user_id': user_id,
@@ -2838,11 +2809,18 @@ def delete_user(user_id):
     except Exception as e:
         logger.error(f"Delete user error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to delete user'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== USER PROFILE ENDPOINTS ===========
 @app.route('/api/user/downloads', methods=['GET'])
 def get_user_downloads():
     """Get user's downloads - includes both downloaded and purchased movies"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session or session['user_id'] == 'admin_001':
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -2872,22 +2850,17 @@ def get_user_downloads():
         
         explicit_downloads = cursor.fetchall()
         
-        conn.close()
-        
         # Combine both lists (unique by movie_id)
         download_dict = {}
-        download_list = []
         
         # Add movies from user_access (purchased movies)
         for row in rows:
             movie = row_to_dict(row)
             movie_id = movie['id']
             if movie_id not in download_dict:
-                # Generate URLs
                 video_url = generate_presigned_url(movie.get('video_key'))
                 poster_url = generate_presigned_url(movie.get('poster_key'))
                 
-                # Calculate days remaining until expiry
                 days_remaining = None
                 if movie.get('expires_at'):
                     expiry_date = datetime.fromisoformat(movie['expires_at'])
@@ -2922,12 +2895,10 @@ def get_user_downloads():
                 except:
                     movie_data = {}
                 
-                # Generate URLs if not in movie_data
                 if 'url' not in movie_data:
                     video_url = generate_presigned_url(download.get('video_key'))
                     poster_url = generate_presigned_url(download.get('poster_key'))
                     
-                    # Calculate days remaining until expiry
                     days_remaining = None
                     if download.get('expires_at'):
                         expiry_date = datetime.fromisoformat(download['expires_at'])
@@ -2955,7 +2926,6 @@ def get_user_downloads():
                         'movieData': movie_data
                     }
         
-        # Convert dict to list
         download_list = list(download_dict.values())
         
         return jsonify({'success': True, 'downloads': download_list})
@@ -2963,16 +2933,20 @@ def get_user_downloads():
     except Exception as e:
         logger.error(f"Get downloads error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load downloads'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/user/profile', methods=['GET'])
 def get_user_profile():
     """Get user profile"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
-        
-        conn = get_db()
-        cursor = conn.cursor()
         
         if session['user_id'] == 'admin_001':
             user_data = {
@@ -2986,11 +2960,13 @@ def get_user_profile():
                 'isAdmin': True
             }
         else:
+            conn = get_db()
+            cursor = conn.cursor()
+            
             cursor.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],))
             user = cursor.fetchone()
             
             if not user:
-                conn.close()
                 return jsonify({'success': False, 'error': 'User not found'}), 404
             
             user_dict = row_to_dict(user)
@@ -3005,16 +2981,22 @@ def get_user_profile():
                 'isAdmin': bool(user_dict.get('is_admin', False))
             }
         
-        conn.close()
         return jsonify({'success': True, 'user': user_data})
         
     except Exception as e:
         logger.error(f"Profile error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to load profile'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/user/change-password', methods=['POST'])
 def change_password():
     """Change user password"""
+    conn = None
+    cursor = None
     try:
         if 'user_id' not in session:
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
@@ -3033,30 +3015,24 @@ def change_password():
         if len(new_password) < 6:
             return jsonify({'success': False, 'error': 'New password must be at least 6 characters'}), 400
         
-        conn = get_db()
-        cursor = conn.cursor()
-        
         if session['user_id'] == 'admin_001':
-            # For admin, use hardcoded password
             if current_password != os.getenv('ADMIN_PASSWORD', 'ASGWG2@##...'):
-                conn.close()
                 return jsonify({'success': False, 'error': 'Current password is incorrect'}), 400
             
-            # Can't change admin password via web
-            conn.close()
             return jsonify({'success': True, 'message': 'Admin password cannot be changed via web interface'})
         else:
+            conn = get_db()
+            cursor = conn.cursor()
+            
             cursor.execute('SELECT password_hash FROM users WHERE id = ?', (session['user_id'],))
             user = cursor.fetchone()
             
             if not user or not check_password_hash(user['password_hash'], current_password):
-                conn.close()
                 return jsonify({'success': False, 'error': 'Current password is incorrect'}), 400
             
             new_password_hash = generate_password_hash(new_password)
             cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?', (new_password_hash, session['user_id']))
             conn.commit()
-            conn.close()
         
         log_activity(session['user_id'], session['email'], 'change_password', {})
         
@@ -3065,109 +3041,11 @@ def change_password():
     except Exception as e:
         logger.error(f"Change password error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to change password'}), 500
-
-# =========== AUTO ADD TO DOWNLOADS ENDPOINT ===========
-@app.route('/api/movies/<int:movie_id>/add-to-downloads-after-payment', methods=['POST'])
-def add_to_downloads_after_payment(movie_id):
-    """Automatically add purchased movie to downloads"""
-    try:
-        if 'user_id' not in session:
-            return jsonify({'success': False, 'error': 'Authentication required'}), 401
-        
-        data = request.get_json()
-        transaction_id = data.get('transaction_id')
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        # Check if movie exists and is active
-        cursor.execute('SELECT * FROM movies WHERE id = ? AND is_active = 1', (movie_id,))
-        movie = cursor.fetchone()
-        
-        if not movie:
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
             conn.close()
-            return jsonify({'success': False, 'error': 'Movie not found or has expired'}), 404
-        
-        movie_dict = row_to_dict(movie)
-        
-        # Check if already in downloads
-        cursor.execute('''
-            SELECT id FROM downloads 
-            WHERE user_id = ? AND movie_id = ?
-        ''', (session['user_id'], movie_id))
-        
-        if cursor.fetchone():
-            conn.close()
-            return jsonify({'success': True, 'message': 'Movie already in downloads'})
-        
-        # Add to downloads
-        video_url = generate_presigned_url(movie_dict['video_key'])
-        
-        # Get poster URL safely
-        poster_url = None
-        if movie_dict.get('poster_key'):
-            poster_url = generate_presigned_url(movie_dict['poster_key'])
-        
-        movie_data = json.dumps({
-            'id': movie_dict['id'],
-            'title': movie_dict['title'],
-            'description': movie_dict.get('description', ''),
-            'poster': poster_url,
-            'year': movie_dict.get('year'),
-            'duration': movie_dict.get('duration'),
-            'url': video_url,
-            'views': movie_dict.get('views', 0),
-            'downloads': movie_dict.get('download_count', 0),
-            'is_active': bool(movie_dict.get('is_active', 1)),
-            'expires_at': movie_dict.get('expires_at')
-        })
-        
-        cursor.execute('''
-            INSERT INTO downloads (user_id, movie_id, movie_data, downloaded_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (session['user_id'], movie_id, movie_data))
-        
-        # Update counters
-        cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
-        cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
-        
-        conn.commit()
-        conn.close()
-        
-        log_activity(session['user_id'], session['email'], 'auto_add_to_downloads', {
-            'movie_id': movie_id,
-            'transaction_id': transaction_id
-        })
-        
-        return jsonify({'success': True, 'message': 'Movie added to downloads'})
-        
-    except Exception as e:
-        logger.error(f"Add to downloads error: {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Failed to add to downloads'}), 500
-
-# =========== MISC ENDPOINTS ===========
-@app.route('/api/test-s3-url/<path:key>', methods=['GET'])
-def test_s3_url(key):
-    """Test Backblaze B2 URL accessibility"""
-    try:
-        if not s3_client:
-            return jsonify({'success': False, 'error': 'Backblaze B2 client not available'})
-        
-        # Generate public URL
-        public_url = generate_s3_public_url(key)
-        
-        # Generate presigned URL
-        presigned_url = generate_presigned_url(key)
-        
-        return jsonify({
-            'success': True,
-            'public_url': public_url,
-            'presigned_url': presigned_url,
-            'key': key
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
 
 # =========== STATIC FILE SERVING ===========
 @app.route('/')
@@ -3183,111 +3061,80 @@ def serve_static(path):
 # =========== ERROR HANDLERS ===========
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors"""
     return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
 
 @app.errorhandler(410)
 def gone(error):
-    """Handle 410 errors (Gone - movie expired)"""
     return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors"""
     logger.error(f"Internal server error: {str(error)}")
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 @app.errorhandler(413)
 def too_large(error):
-    """Handle file too large errors"""
-    return jsonify({'success': False, 'error': 'File too large. Maximum size is 500MB'}), 413
+    return jsonify({'success': False, 'error': 'File too large. Maximum size is 900MB'}), 413
 
-# =========== CORS CONFIGURATION SCRIPT ===========
-def configure_s3_cors():
-    """Configure CORS on Backblaze B2 bucket"""
-    if not s3_client:
-        print("❌ Backblaze B2 client not available")
-        return
-    
-    try:
-        cors_configuration = {
-            'CORSRules': [
-                {
-                    'AllowedOrigins': ['*'],
-                    'AllowedMethods': ['GET', 'HEAD'],
-                    'AllowedHeaders': ['*'],
-                    'ExposeHeaders': ['ETag', 'Content-Type', 'Content-Length', 'Accept-Ranges'],
-                    'MaxAgeSeconds': 3000
-                }
-            ]
-        }
-        
-        s3_client.put_bucket_cors(
-            Bucket=BACKBLAZE_CONFIG['bucket'],
-            CORSConfiguration=cors_configuration
-        )
-        
-        print("✅ CORS configured successfully for Backblaze B2 bucket")
-        
-    except Exception as e:
-        print(f"❌ Failed to configure CORS: {str(e)}")
-
-# =========== DEBUG ENDPOINT FOR DATABASE SCHEMA ===========
+# =========== DATABASE SCHEMA CHECK ===========
 @app.route('/api/debug/db-schema', methods=['GET'])
 def debug_db_schema():
     """Debug endpoint to check database schema"""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    # Check movies table structure
-    cursor.execute("PRAGMA table_info(movies)")
-    columns = cursor.fetchall()
-    
-    schema = []
-    for col in columns:
-        schema.append({
-            'id': col[0],
-            'name': col[1],
-            'type': col[2],
-            'notnull': col[3],
-            'default': col[4],
-            'pk': col[5]
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("PRAGMA table_info(movies)")
+        columns = cursor.fetchall()
+        
+        schema = []
+        for col in columns:
+            schema.append({
+                'id': col[0],
+                'name': col[1],
+                'type': col[2],
+                'notnull': col[3],
+                'default': col[4],
+                'pk': col[5]
+            })
+        
+        column_names = [col['name'] for col in schema]
+        
+        return jsonify({
+            'success': True,
+            'table': 'movies',
+            'columns': schema,
+            'has_expires_at': 'expires_at' in column_names,
+            'has_s3_url': 's3_url' in column_names,
+            'has_stream_url': 'stream_url' in column_names,
+            'message': 'Database schema check'
         })
-    
-    # Check if expires_at exists
-    column_names = [col['name'] for col in schema]
-    
-    conn.close()
-    
-    return jsonify({
-        'success': True,
-        'table': 'movies',
-        'columns': schema,
-        'has_expires_at': 'expires_at' in column_names,
-        'has_s3_url': 's3_url' in column_names,
-        'has_stream_url': 'stream_url' in column_names,
-        'message': 'Database schema check'
-    })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # =========== APPLICATION START ===========
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (BACKBLAZE B2)")
+    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (FIXED)")
     print("="*60)
     print(f"📁 Environment: {'PRODUCTION' if RENDER else 'DEVELOPMENT'}")
-    print(f"📁 Database: {'/tmp/bfcinema.db' if RENDER else 'bfcinema.db'}")
+    print(f"📁 Database: {get_db_path()}")
+    print(f"📁 Database exists: {os.path.exists(get_db_path())}")
+    print(f"📁 Database size: {os.path.getsize(get_db_path()) if os.path.exists(get_db_path()) else 0} bytes")
+    print(f"📁 Uploads: {get_upload_dir()}")
+    print(f"📁 Temp: {get_temp_dir()}")
     print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
     print(f"🔗 B2 Bucket: {BACKBLAZE_CONFIG['bucket']}")
     print(f"📍 Endpoint: {BACKBLAZE_CONFIG['endpoint']}")
     print(f"🗑️  Auto-deletion: ✅ Enabled (10 months expiry)")
     print("="*60)
-    
-    # Configure CORS on Backblaze B2
-    if s3_client:
-        try:
-            configure_s3_cors()
-        except:
-            print("⚠️  Could not configure CORS automatically")
     
     # Start the auto-deletion scheduler
     try:
@@ -3317,13 +3164,12 @@ if __name__ == '__main__':
     print("="*60 + "\n")
     
     try:
-        # Get port from environment variable (Render sets this)
         port = int(os.getenv('PORT', 5000))
         
         app.run(
             host='0.0.0.0',
             port=port,
-            debug=not RENDER,  # Disable debug in production
+            debug=not RENDER,
             threaded=True,
             use_reloader=False
         )
