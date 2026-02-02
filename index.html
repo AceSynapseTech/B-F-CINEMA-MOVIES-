@@ -1380,7 +1380,6 @@
             transform: translateX(100%);
             transition: transform 0.5s ease;
             display: none;
-            max-width: 90%;
         }
         
         .notification.show {
@@ -2720,6 +2719,14 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // Server endpoint
     const SERVER_ENDPOINT = window.location.origin;
     
+    // API Credentials
+    const API_CREDENTIALS = {
+        apiUsername: '7048202',
+        apiTransactionKey: 'f40fc85618',
+        testApiUsername: '7f6c65d70a80c58a7e2e3bf1889305d9',
+        testApiTransactionKey: 'ceedc15ca4'
+    };
+    
     let currentUser = null;
     let isAdmin = false;
     let movies = [];
@@ -2749,6 +2756,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         console.log('B/F Cinema Platform Initializing...');
         console.log('Server Endpoint:', SERVER_ENDPOINT);
         console.log('Backblaze Config:', BACKBLAZE_CONFIG);
+        console.log('API Credentials Loaded:', API_CREDENTIALS);
         
         // Update server endpoint displays
         updateServerEndpointDisplays();
@@ -5092,6 +5100,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     console.log('B/F Cinema Platform Initialization Complete!');
     console.log('Using server endpoint:', SERVER_ENDPOINT);
     console.log('Backblaze configuration loaded:', BACKBLAZE_CONFIG);
+    console.log('API credentials loaded:', API_CREDENTIALS);
     console.log('Plyr player initialized:', player ? 'Yes' : 'No');
     </script>
 </body>
