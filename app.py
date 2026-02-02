@@ -123,6 +123,30 @@ BACKBLAZE_CONFIG = {
     'endpoint': os.getenv('BACKBLAZE_ENDPOINT', 'https://s3.eu-central-003.backblazeb2.com')
 }
 
+# =========== MPESA CONFIGURATION ===========
+MPESA_CONFIG = {
+    'consumer_key': os.getenv('MPESA_CONSUMER_KEY', 'f40fc85618'),
+    'consumer_secret': os.getenv('MPESA_CONSUMER_SECRET', '7f6c65d70a80c58a7e2e3bf1889305d9'),
+    'business_shortcode': os.getenv('MPESA_BUSINESS_SHORTCODE', '7048202'),
+    'passkey': os.getenv('MPESA_PASSKEY', 'bf62b5a5f0ec05ff7bda0a21d146ef9e6d0f5cd2f38e6'),
+    'environment': os.getenv('MPESA_ENVIRONMENT', 'sandbox'),  # sandbox or production
+    'callback_url': os.getenv('MPESA_CALLBACK_URL', 'https://b-f-cinema-movies-mj6b.onrender.com/api/mpesa-callback'),
+    'account_reference': os.getenv('MPESA_ACCOUNT_REFERENCE', 'B/F Cinema Movies'),
+    'transaction_desc': os.getenv('MPESA_TRANSACTION_DESC', 'Movie Purchase')
+}
+
+# MPesa API endpoints
+MPESA_API_URLS = {
+    'sandbox': {
+        'auth': 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+        'stk_push': 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
+    },
+    'production': {
+        'auth': 'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+        'stk_push': 'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
+    }
+}
+
 # Initialize Backblaze B2 S3 client
 s3_client = None
 try:
@@ -179,7 +203,8 @@ def init_db():
                 file_type TEXT DEFAULT 'video/mp4',
                 free_preview BOOLEAN DEFAULT 0,
                 s3_url TEXT,
-                stream_url TEXT
+                stream_url TEXT,
+                price DECIMAL(10,2) DEFAULT 30.00
             )
         """)
         
@@ -217,6 +242,30 @@ def init_db():
                 status TEXT DEFAULT 'pending',
                 verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                mpesa_checkout_request_id TEXT,
+                mpesa_merchant_request_id TEXT,
+                mpesa_result_code TEXT,
+                mpesa_result_desc TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # MPesa STK Push table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mpesa_stk_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                checkout_request_id TEXT UNIQUE NOT NULL,
+                merchant_request_id TEXT,
+                user_id INTEGER NOT NULL,
+                movie_id INTEGER NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                phone_number TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                result_code TEXT,
+                result_desc TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE
             )
@@ -280,6 +329,7 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_transactions ON transactions(user_id, created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_access ON user_access(user_id, movie_id, is_active)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_movie_expires ON movies(expires_at, is_active)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_mpesa_checkout_id ON mpesa_stk_requests(checkout_request_id)')
         
         # Check if admin user exists
         cursor.execute('SELECT * FROM users WHERE email = ?', ('BFCM2026@GMAIL.COM',))
@@ -343,6 +393,7 @@ print(f"📁 Database: {get_db_path()}")
 print(f"📁 Uploads: {get_upload_dir()}")
 print(f"📁 Temp: {get_temp_dir()}")
 print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
+print(f"💰 MPesa Integration: {'✅ Configured' if MPESA_CONFIG['consumer_key'] else '❌ Not Configured'}")
 print("="*60)
 
 # =========== BACKUP DATABASE FUNCTION ===========
@@ -362,6 +413,386 @@ def backup_database():
 
 # Create initial backup
 backup_database()
+
+# =========== MPESA HELPER FUNCTIONS ===========
+def get_mpesa_access_token():
+    """Get MPesa OAuth access token"""
+    try:
+        consumer_key = MPESA_CONFIG['consumer_key']
+        consumer_secret = MPESA_CONFIG['consumer_secret']
+        environment = MPESA_CONFIG['environment']
+        
+        # Encode credentials
+        credentials = f"{consumer_key}:{consumer_secret}"
+        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        
+        # Get API URL
+        auth_url = MPESA_API_URLS[environment]['auth']
+        
+        headers = {
+            'Authorization': f'Basic {encoded_credentials}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.get(auth_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            access_token = data.get('access_token')
+            expires_in = data.get('expires_in', 3600)
+            
+            logger.info(f"✅ MPesa access token obtained (expires in {expires_in}s)")
+            return access_token
+        else:
+            logger.error(f"❌ MPesa token error: {response.status_code} - {response.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ MPesa token error: {str(e)}")
+        return None
+
+def generate_mpesa_password(timestamp):
+    """Generate MPesa API password"""
+    business_shortcode = MPESA_CONFIG['business_shortcode']
+    passkey = MPESA_CONFIG['passkey']
+    
+    data_to_encode = f"{business_shortcode}{passkey}{timestamp}"
+    encoded_password = base64.b64encode(data_to_encode.encode()).decode()
+    
+    return encoded_password
+
+def initiate_stk_push(phone_number, amount, movie_id, user_id):
+    """Initiate MPesa STK Push payment"""
+    try:
+        access_token = get_mpesa_access_token()
+        if not access_token:
+            return {'success': False, 'error': 'Failed to get MPesa access token'}
+        
+        # Format phone number (2547XXXXXXXX)
+        if phone_number.startswith('0'):
+            phone_number = '254' + phone_number[1:]
+        elif phone_number.startswith('+254'):
+            phone_number = phone_number[1:]
+        elif len(phone_number) == 9:
+            phone_number = '254' + phone_number
+        
+        if not phone_number.startswith('254'):
+            return {'success': False, 'error': 'Invalid phone number format. Use 07XXXXXXXX or 2547XXXXXXXX'}
+        
+        # Generate timestamp
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        
+        # Generate password
+        password = generate_mpesa_password(timestamp)
+        
+        # Prepare request data
+        business_shortcode = MPESA_CONFIG['business_shortcode']
+        callback_url = MPESA_CONFIG['callback_url']
+        account_reference = MPESA_CONFIG['account_reference']
+        transaction_desc = MPESA_CONFIG['transaction_desc']
+        
+        request_data = {
+            "BusinessShortCode": business_shortcode,
+            "Password": password,
+            "Timestamp": timestamp,
+            "TransactionType": "CustomerPayBillOnline",
+            "Amount": str(int(amount)),  # Amount in whole shillings
+            "PartyA": phone_number,
+            "PartyB": business_shortcode,
+            "PhoneNumber": phone_number,
+            "CallBackURL": callback_url,
+            "AccountReference": account_reference,
+            "TransactionDesc": f"{transaction_desc} - Movie ID: {movie_id}"
+        }
+        
+        # Get API URL based on environment
+        environment = MPESA_CONFIG['environment']
+        stk_push_url = MPESA_API_URLS[environment]['stk_push']
+        
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.info(f"📱 Initiating MPesa STK Push for phone: {phone_number}, amount: {amount}")
+        
+        response = requests.post(stk_push_url, json=request_data, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            
+            if response_data.get('ResponseCode') == '0':
+                merchant_request_id = response_data.get('MerchantRequestID')
+                checkout_request_id = response_data.get('CheckoutRequestID')
+                customer_message = response_data.get('CustomerMessage', '')
+                
+                # Save STK request to database
+                conn = get_db()
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    INSERT INTO mpesa_stk_requests 
+                    (checkout_request_id, merchant_request_id, user_id, movie_id, amount, phone_number, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                ''', (checkout_request_id, merchant_request_id, user_id, movie_id, amount, phone_number))
+                
+                conn.commit()
+                conn.close()
+                
+                logger.info(f"✅ STK Push initiated successfully: {checkout_request_id}")
+                
+                return {
+                    'success': True,
+                    'message': customer_message or 'Please check your phone to complete payment',
+                    'checkout_request_id': checkout_request_id,
+                    'merchant_request_id': merchant_request_id
+                }
+            else:
+                error_message = response_data.get('ResponseDescription', 'Payment initiation failed')
+                logger.error(f"❌ STK Push error: {error_message}")
+                return {'success': False, 'error': error_message}
+        else:
+            logger.error(f"❌ STK Push HTTP error: {response.status_code} - {response.text}")
+            return {'success': False, 'error': f'Payment initiation failed. Status: {response.status_code}'}
+            
+    except Exception as e:
+        logger.error(f"❌ STK Push error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {'success': False, 'error': f'Payment initiation failed: {str(e)}'}
+
+def process_mpesa_callback(callback_data):
+    """Process MPesa callback data"""
+    try:
+        result_code = callback_data.get('Body', {}).get('stkCallback', {}).get('ResultCode')
+        result_desc = callback_data.get('Body', {}).get('stkCallback', {}).get('ResultDesc')
+        checkout_request_id = callback_data.get('Body', {}).get('stkCallback', {}).get('CheckoutRequestID')
+        
+        logger.info(f"📱 MPesa Callback received - ResultCode: {result_code}, CheckoutRequestID: {checkout_request_id}")
+        
+        if not checkout_request_id:
+            return {'success': False, 'error': 'No checkout request ID in callback'}
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Find the STK request
+        cursor.execute('''
+            SELECT * FROM mpesa_stk_requests 
+            WHERE checkout_request_id = ? 
+            AND status = 'pending'
+        ''', (checkout_request_id,))
+        
+        stk_request = cursor.fetchone()
+        
+        if not stk_request:
+            logger.error(f"❌ STK request not found: {checkout_request_id}")
+            return {'success': False, 'error': 'STK request not found'}
+        
+        stk_request_dict = row_to_dict(stk_request)
+        
+        # Update STK request status
+        cursor.execute('''
+            UPDATE mpesa_stk_requests 
+            SET status = ?, 
+                result_code = ?, 
+                result_desc = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE checkout_request_id = ?
+        ''', ('completed', result_code, result_desc, checkout_request_id))
+        
+        # If payment successful (ResultCode 0)
+        if result_code == 0:
+            callback_metadata = callback_data.get('Body', {}).get('stkCallback', {}).get('CallbackMetadata', {}).get('Item', [])
+            
+            # Extract payment details
+            transaction_details = {}
+            for item in callback_metadata:
+                transaction_details[item.get('Name')] = item.get('Value')
+            
+            amount = transaction_details.get('Amount')
+            mpesa_receipt_number = transaction_details.get('MpesaReceiptNumber')
+            transaction_date = transaction_details.get('TransactionDate')
+            phone_number = transaction_details.get('PhoneNumber')
+            
+            # Format phone number
+            if phone_number:
+                phone_number = str(phone_number)
+                if len(phone_number) == 12 and phone_number.startswith('254'):
+                    phone_number = f"0{phone_number[3:]}"
+            
+            # Get movie details
+            cursor.execute('SELECT * FROM movies WHERE id = ?', (stk_request_dict['movie_id'],))
+            movie = cursor.fetchone()
+            
+            if movie:
+                movie_dict = row_to_dict(movie)
+                
+                # Create transaction record
+                cursor.execute('''
+                    INSERT INTO transactions 
+                    (transaction_code, user_id, user_email, user_phone, movie_id, movie_title, 
+                     mpesa_message, amount, payment_date, payment_time, status, verified_at,
+                     mpesa_checkout_request_id, mpesa_merchant_request_id, mpesa_result_code, mpesa_result_desc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP, ?, ?, ?, ?)
+                ''', (
+                    mpesa_receipt_number,
+                    stk_request_dict['user_id'],
+                    '',  # Will be filled below
+                    phone_number or stk_request_dict['phone_number'],
+                    stk_request_dict['movie_id'],
+                    movie_dict['title'],
+                    f'MPesa Payment - {mpesa_receipt_number}',
+                    amount or stk_request_dict['amount'],
+                    datetime.now().strftime('%d/%m/%y'),
+                    datetime.now().strftime('%I:%M %p'),
+                    checkout_request_id,
+                    stk_request_dict['merchant_request_id'],
+                    result_code,
+                    result_desc
+                ))
+                
+                transaction_id = cursor.lastrowid
+                
+                # Get user email
+                cursor.execute('SELECT email FROM users WHERE id = ?', (stk_request_dict['user_id'],))
+                user = cursor.fetchone()
+                user_email = user['email'] if user else ''
+                
+                # Update transaction with user email
+                cursor.execute('UPDATE transactions SET user_email = ? WHERE id = ?', (user_email, transaction_id))
+                
+                # Grant access to movie
+                cursor.execute('''
+                    INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
+                    VALUES (?, ?, ?, 1)
+                ''', (stk_request_dict['user_id'], stk_request_dict['movie_id'], transaction_id))
+                
+                # Add to downloads
+                video_url = generate_presigned_url(movie_dict.get('video_key'))
+                poster_url = generate_presigned_url(movie_dict.get('poster_key'))
+                
+                movie_data = json.dumps({
+                    'id': movie_dict['id'],
+                    'title': movie_dict['title'],
+                    'description': movie_dict.get('description', ''),
+                    'poster': poster_url,
+                    'year': movie_dict.get('year'),
+                    'duration': movie_dict.get('duration'),
+                    'url': video_url,
+                    'views': movie_dict.get('views', 0),
+                    'downloads': movie_dict.get('download_count', 0)
+                })
+                
+                cursor.execute('''
+                    INSERT OR REPLACE INTO downloads (user_id, movie_id, movie_data, downloaded_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (stk_request_dict['user_id'], stk_request_dict['movie_id'], movie_data))
+                
+                # Update movie download count
+                cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (stk_request_dict['movie_id'],))
+                
+                # Update user downloads count
+                cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (stk_request_dict['user_id'],))
+                
+                conn.commit()
+                
+                # Log activity
+                log_activity(stk_request_dict['user_id'], user_email, 'mpesa_payment_success', {
+                    'movie_id': stk_request_dict['movie_id'],
+                    'transaction_code': mpesa_receipt_number,
+                    'amount': amount or stk_request_dict['amount'],
+                    'checkout_request_id': checkout_request_id
+                })
+                
+                logger.info(f"✅ Payment successful: {mpesa_receipt_number} for movie {stk_request_dict['movie_id']}")
+                
+                return {
+                    'success': True,
+                    'message': 'Payment processed successfully',
+                    'transaction_code': mpesa_receipt_number,
+                    'amount': amount,
+                    'movie_id': stk_request_dict['movie_id']
+                }
+            else:
+                logger.error(f"❌ Movie not found: {stk_request_dict['movie_id']}")
+                return {'success': False, 'error': 'Movie not found'}
+        else:
+            # Payment failed
+            error_message = result_desc or 'Payment failed'
+            
+            log_activity(stk_request_dict['user_id'], '', 'mpesa_payment_failed', {
+                'movie_id': stk_request_dict['movie_id'],
+                'checkout_request_id': checkout_request_id,
+                'error': error_message,
+                'result_code': result_code
+            })
+            
+            logger.error(f"❌ Payment failed: {error_message} (Code: {result_code})")
+            
+            return {
+                'success': False,
+                'error': error_message,
+                'result_code': result_code
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ MPesa callback processing error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {'success': False, 'error': f'Callback processing failed: {str(e)}'}
+    finally:
+        if conn:
+            conn.close()
+
+def check_payment_status(checkout_request_id):
+    """Check payment status"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT s.*, m.title as movie_title, u.name as user_name, u.email
+            FROM mpesa_stk_requests s
+            JOIN movies m ON s.movie_id = m.id
+            JOIN users u ON s.user_id = u.id
+            WHERE s.checkout_request_id = ?
+        ''', (checkout_request_id,))
+        
+        stk_request = cursor.fetchone()
+        
+        if not stk_request:
+            return {'success': False, 'error': 'Payment request not found'}
+        
+        stk_request_dict = row_to_dict(stk_request)
+        
+        # Check if transaction exists for this STK request
+        cursor.execute('''
+            SELECT * FROM transactions 
+            WHERE mpesa_checkout_request_id = ?
+        ''', (checkout_request_id,))
+        
+        transaction = cursor.fetchone()
+        
+        conn.close()
+        
+        if transaction:
+            transaction_dict = row_to_dict(transaction)
+            return {
+                'success': True,
+                'status': 'completed',
+                'transaction': transaction_dict,
+                'stk_request': stk_request_dict
+            }
+        else:
+            return {
+                'success': True,
+                'status': stk_request_dict['status'],
+                'stk_request': stk_request_dict,
+                'message': stk_request_dict.get('result_desc', 'Payment pending')
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Payment status check error: {str(e)}")
+        return {'success': False, 'error': str(e)}
 
 # =========== HELPER FUNCTIONS ===========
 def generate_presigned_url(key, expires=7200):
@@ -562,7 +993,7 @@ def schedule_auto_deletion():
     except Exception as e:
         logger.error(f"❌ Error starting auto-deletion scheduler: {str(e)}")
 
-# =========== MPESA FUNCTIONS ===========
+# =========== LEGACY MPESA PARSING FUNCTIONS ===========
 def parse_mpesa_message(message):
     """Parse MPesa message to extract transaction details"""
     try:
@@ -779,6 +1210,318 @@ def before_request():
     if RENDER and request.path.startswith('/api/'):
         logger.info(f"{request.method} {request.path} - {request.remote_addr}")
 
+# =========== MPESA PAYMENT ENDPOINTS ===========
+@app.route('/api/movies/<int:movie_id>/initiate-payment', methods=['POST'])
+def initiate_payment(movie_id):
+    """Initiate MPesa payment for a movie"""
+    try:
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        data = request.get_json()
+        phone_number = data.get('phone_number', '').strip()
+        
+        # Validate phone number
+        if not phone_number:
+            return jsonify({'success': False, 'error': 'Phone number is required'}), 400
+        
+        # Format validation
+        if len(phone_number) < 10:
+            return jsonify({'success': False, 'error': 'Invalid phone number'}), 400
+        
+        # Get movie details
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        conn.close()
+        
+        if not movie:
+            return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        
+        movie_dict = row_to_dict(movie)
+        amount = float(movie_dict.get('price', 30.00))
+        
+        # Check if user already has access
+        if has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'You already have access to this movie'}), 400
+        
+        # Check for pending payments for same movie
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM mpesa_stk_requests 
+            WHERE user_id = ? AND movie_id = ? AND status = 'pending'
+        ''', (session['user_id'], movie_id))
+        
+        pending_payment = cursor.fetchone()
+        conn.close()
+        
+        if pending_payment:
+            return jsonify({
+                'success': False, 
+                'error': 'You already have a pending payment for this movie',
+                'checkout_request_id': pending_payment['checkout_request_id']
+            }), 400
+        
+        # Initiate STK Push
+        result = initiate_stk_push(phone_number, amount, movie_id, session['user_id'])
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'message': result['message'],
+                'checkout_request_id': result['checkout_request_id'],
+                'movie_title': movie_dict['title'],
+                'amount': amount
+            })
+        else:
+            return jsonify({'success': False, 'error': result.get('error', 'Payment initiation failed')}), 400
+            
+    except Exception as e:
+        logger.error(f"❌ Payment initiation error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Payment initiation failed'}), 500
+
+@app.route('/api/movies/<int:movie_id>/check-payment-status', methods=['GET'])
+def check_payment_status_endpoint(movie_id):
+    """Check payment status for a movie"""
+    try:
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        checkout_request_id = request.args.get('checkout_request_id')
+        
+        if not checkout_request_id:
+            return jsonify({'success': False, 'error': 'Checkout request ID is required'}), 400
+        
+        # Check payment status
+        result = check_payment_status(checkout_request_id)
+        
+        if not result['success']:
+            return jsonify({'success': False, 'error': result['error']}), 400
+        
+        # Check if user has access now
+        has_access = has_movie_access(session['user_id'], movie_id)
+        
+        response_data = {
+            'success': True,
+            'status': result['status'],
+            'has_access': has_access
+        }
+        
+        if result['status'] == 'completed' and 'transaction' in result:
+            response_data['transaction'] = result['transaction']
+            response_data['transaction_code'] = result['transaction']['transaction_code']
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"❌ Payment status check error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Payment status check failed'}), 500
+
+@app.route('/api/mpesa-callback', methods=['POST'])
+def mpesa_callback():
+    """Handle MPesa callback"""
+    try:
+        callback_data = request.get_json()
+        
+        if not callback_data:
+            return jsonify({'ResultCode': 1, 'ResultDesc': 'Invalid callback data'}), 400
+        
+        logger.info(f"📱 MPesa callback received: {json.dumps(callback_data, indent=2)}")
+        
+        # Process callback
+        result = process_mpesa_callback(callback_data)
+        
+        if result['success']:
+            return jsonify({'ResultCode': 0, 'ResultDesc': 'Success'})
+        else:
+            return jsonify({'ResultCode': 1, 'ResultDesc': result.get('error', 'Processing failed')})
+            
+    except Exception as e:
+        logger.error(f"❌ MPesa callback error: {str(e)}")
+        return jsonify({'ResultCode': 1, 'ResultDesc': 'Callback processing error'}), 500
+
+# =========== LEGACY PAYMENT VERIFICATION (Backward Compatible) ===========
+@app.route('/api/movies/<int:movie_id>/verify-payment', methods=['POST'])
+def verify_payment_legacy(movie_id):
+    """Legacy manual payment verification (for backward compatibility)"""
+    conn = None
+    cursor = None
+    try:
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        
+        data = request.get_json()
+        phone = data.get('phone', '').strip()
+        transaction_code = data.get('transaction_code', '').strip().upper()
+        mpesa_message = data.get('mpesa_message', '').strip()
+        
+        # If MPesa message is provided, use manual verification
+        if phone and transaction_code and mpesa_message:
+            # Validate input
+            if not re.match(r'^254[17]\d{8}$', phone):
+                return jsonify({'success': False, 'error': 'Invalid phone number format. Use format: 2547XXXXXXXX'}), 400
+            
+            if not re.match(r'^[A-Z0-9]{10}$', transaction_code):
+                return jsonify({'success': False, 'error': 'Transaction code must be 10 alphanumeric characters'}), 400
+            
+            # Parse MPesa message
+            parsed = parse_mpesa_message(mpesa_message)
+            
+            if not parsed['is_valid']:
+                return jsonify({'success': False, 'error': parsed.get('error', 'Invalid MPesa message')}), 400
+            
+            if parsed['transaction_code'] != transaction_code:
+                return jsonify({'success': False, 'error': f'Transaction code mismatch. Message has: {parsed["transaction_code"]}, you entered: {transaction_code}'}), 400
+            
+            amount = parsed['amount']
+            if abs(amount - 30.00) > 0.01:
+                return jsonify({'success': False, 'error': f'Amount must be KES 30.00. Received: KES {amount:.2f}'}), 400
+            
+            if parsed['recipient'].upper() != "PETER KINUTHIA NGIGI":
+                return jsonify({'success': False, 'error': f'Payment must be sent to PETER KINUTHIA NGIGI. Received: {parsed["recipient"]}'}), 400
+            
+            conn = get_db()
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT id FROM transactions WHERE transaction_code = ?', (transaction_code,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                return jsonify({'success': False, 'error': 'This transaction code has already been used'}), 400
+            
+            cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
+            movie = cursor.fetchone()
+            
+            if not movie:
+                return jsonify({'success': False, 'error': 'Movie not found'}), 404
+            
+            movie_dict = row_to_dict(movie)
+            
+            cursor.execute('''
+                INSERT INTO transactions 
+                (transaction_code, user_id, user_email, user_phone, movie_id, movie_title, 
+                 mpesa_message, amount, payment_date, payment_time, status, verified_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP)
+            ''', (
+                transaction_code,
+                session['user_id'],
+                session['email'],
+                phone,
+                movie_id,
+                movie_dict['title'],
+                mpesa_message,
+                amount,
+                parsed.get('date', datetime.now().strftime('%d/%m/%y')),
+                parsed.get('time', datetime.now().strftime('%I:%M %p')),
+            ))
+            
+            transaction_id = cursor.lastrowid
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
+                VALUES (?, ?, ?, 1)
+            ''', (session['user_id'], movie_id, transaction_id))
+            
+            # ADD MOVIE TO DOWNLOADS AUTOMATICALLY
+            video_url = generate_presigned_url(movie_dict['video_key'])
+            poster_url = generate_presigned_url(movie_dict.get('poster_key'))
+            
+            movie_data = json.dumps({
+                'id': movie_dict['id'],
+                'title': movie_dict['title'],
+                'description': movie_dict.get('description', ''),
+                'poster': poster_url,
+                'year': movie_dict.get('year'),
+                'duration': movie_dict.get('duration'),
+                'url': video_url,
+                'views': movie_dict.get('views', 0),
+                'downloads': movie_dict.get('download_count', 0)
+            })
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO downloads (user_id, movie_id, movie_data, downloaded_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (session['user_id'], movie_id, movie_data))
+            
+            cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
+            cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
+            
+            conn.commit()
+            
+            # Get receipt data
+            cursor.execute('''
+                SELECT t.*, u.name as user_name, u.email
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.id = ?
+            ''', (transaction_id,))
+            
+            transaction = cursor.fetchone()
+            transaction_dict = row_to_dict(transaction)
+            
+            qr_code = generate_receipt_qr(f"""
+            B/F Cinema Receipt
+            Transaction: {transaction_code}
+            User: {transaction_dict['user_name']}
+            Movie: {movie_dict['title']}
+            Amount: KES {amount:.2f}
+            Date: {parsed.get('date', 'N/A')}
+            Time: {parsed.get('time', 'N/A')}
+            """)
+            
+            receipt = {
+                'transaction_code': transaction_code,
+                'user_name': transaction_dict['user_name'],
+                'user_email': transaction_dict['email'],
+                'user_phone': phone,
+                'movie_title': movie_dict['title'],
+                'amount': amount,
+                'date': parsed.get('date', datetime.now().strftime('%d/%m/%y')),
+                'time': parsed.get('time', datetime.now().strftime('%I:%M %p')),
+                'status': 'verified',
+                'qr_code': qr_code,
+                'receipt_id': f"BFR{transaction_id:06d}",
+                'transaction_id': transaction_id,
+                'movie_id': movie_id
+            }
+            
+            log_activity(session['user_id'], session['email'], 'payment_verified', {
+                'movie_id': movie_id,
+                'transaction_code': transaction_code,
+                'amount': amount,
+                'added_to_downloads': True
+            })
+            
+            return jsonify({
+                'success': True,
+                'message': 'Payment verified successfully! Movie added to your downloads.',
+                'receipt': receipt,
+                'transaction_id': transaction_id,
+                'movie_id': movie_id,
+                'added_to_downloads': True
+            })
+        
+        # If using new API payment
+        checkout_request_id = data.get('checkout_request_id')
+        if checkout_request_id:
+            return check_payment_status_endpoint(movie_id)
+        
+        return jsonify({'success': False, 'error': 'Either provide MPesa details or checkout request ID'}), 400
+        
+    except Exception as e:
+        logger.error(f"Payment verification error: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': f'Payment verification failed: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# =========== REST OF THE FILE REMAINS THE SAME ===========
+# ... (All other endpoints remain unchanged from your original file)
+
 # =========== UPLOAD ENDPOINTS ===========
 @app.route('/api/upload-file', methods=['POST'])
 def upload_file():
@@ -916,13 +1659,13 @@ def upload_movie_complete():
                 video_key, poster_key,
                 uploaded_by, uploaded_at, expires_at,
                 views, download_count, storage,
-                file_size, file_type, s3_url, stream_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?)
+                file_size, file_type, s3_url, stream_url, price
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
         """, (
             title, description, year, duration, 
             video_key, poster_key, session.get('name', 'Admin'),
             expiry_date,
-            file_size, 'video/mp4', video_url, stream_url
+            file_size, 'video/mp4', video_url, stream_url, 30.00
         ))
         
         movie_id = cursor.lastrowid
@@ -951,7 +1694,8 @@ def upload_movie_complete():
             'title': title,
             'video_url': video_url,
             'stream_url': stream_url,
-            'expires_at': expiry_date.isoformat()
+            'expires_at': expiry_date.isoformat(),
+            'price': 30.00
         })
         
     except Exception as e:
@@ -1239,9 +1983,11 @@ def debug_movie(movie_id):
                 'is_active': bool(movie_dict.get('is_active', 1)),
                 'uploaded_at': movie_dict.get('uploaded_at'),
                 'expires_at': movie_dict.get('expires_at'),
-                'days_remaining': days_remaining
+                'days_remaining': days_remaining,
+                'price': float(movie_dict.get('price', 30.00))
             },
-            'backblaze_connected': s3_client is not None
+            'backblaze_connected': s3_client is not None,
+            'mpesa_configured': bool(MPESA_CONFIG['consumer_key'])
         })
         
     except Exception as e:
@@ -1330,7 +2076,8 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'database': 'connected',
         'backblaze_connected': s3_client is not None,
-        'version': '2.0.0',
+        'mpesa_configured': bool(MPESA_CONFIG['consumer_key']),
+        'version': '2.1.0',
         'render': RENDER,
         'environment': 'production' if RENDER else 'development'
     })
@@ -1378,6 +2125,7 @@ def system_check():
             'upload_dir_exists': os.path.exists(upload_dir),
             'temp_dir_exists': os.path.exists(temp_dir),
             'backblaze_connected': s3_client is not None,
+            'mpesa_configured': bool(MPESA_CONFIG['consumer_key']),
             'render_environment': RENDER,
             'timestamp': datetime.now().isoformat(),
             'database_path': db_path,
@@ -1686,7 +2434,8 @@ def get_movies():
                 'has_access': has_access,
                 'free_preview': bool(movie.get('free_preview', False)),
                 'file_type': movie.get('file_type', 'video/mp4'),
-                'file_size': movie.get('file_size', 0)
+                'file_size': movie.get('file_size', 0),
+                'price': float(movie.get('price', 30.00))
             })
 
         return jsonify(success=True, movies=results)
@@ -1858,7 +2607,8 @@ def get_movie_details(movie_id):
             'uploaded_at': movie_dict.get('uploaded_at'),
             'expires_at': movie_dict.get('expires_at'),
             'days_remaining': days_remaining,
-            'has_access': has_access
+            'has_access': has_access,
+            'price': float(movie_dict.get('price', 30.00))
         })
     except Exception as e:
         logger.error(f"Get movie details error: {str(e)}")
@@ -1869,177 +2619,7 @@ def get_movie_details(movie_id):
         if conn:
             conn.close()
 
-# =========== PAYMENT ENDPOINTS ===========
-@app.route('/api/movies/<int:movie_id>/verify-payment', methods=['POST'])
-def verify_payment(movie_id):
-    """Verify MPesa payment and grant access to movie"""
-    conn = None
-    cursor = None
-    try:
-        if 'user_id' not in session:
-            return jsonify({'success': False, 'error': 'Authentication required'}), 401
-        
-        data = request.get_json()
-        phone = data.get('phone', '').strip()
-        transaction_code = data.get('transaction_code', '').strip().upper()
-        mpesa_message = data.get('mpesa_message', '').strip()
-        
-        # Validate input
-        if not phone or not transaction_code or not mpesa_message:
-            return jsonify({'success': False, 'error': 'All fields are required'}), 400
-        
-        if not re.match(r'^254[17]\d{8}$', phone):
-            return jsonify({'success': False, 'error': 'Invalid phone number format. Use format: 2547XXXXXXXX'}), 400
-        
-        if not re.match(r'^[A-Z0-9]{10}$', transaction_code):
-            return jsonify({'success': False, 'error': 'Transaction code must be 10 alphanumeric characters'}), 400
-        
-        # Parse MPesa message
-        parsed = parse_mpesa_message(mpesa_message)
-        
-        if not parsed['is_valid']:
-            return jsonify({'success': False, 'error': parsed.get('error', 'Invalid MPesa message')}), 400
-        
-        if parsed['transaction_code'] != transaction_code:
-            return jsonify({'success': False, 'error': f'Transaction code mismatch. Message has: {parsed["transaction_code"]}, you entered: {transaction_code}'}), 400
-        
-        amount = parsed['amount']
-        if abs(amount - 30.00) > 0.01:
-            return jsonify({'success': False, 'error': f'Amount must be KES 30.00. Received: KES {amount:.2f}'}), 400
-        
-        if parsed['recipient'].upper() != "PETER KINUTHIA NGIGI":
-            return jsonify({'success': False, 'error': f'Payment must be sent to PETER KINUTHIA NGIGI. Received: {parsed["recipient"]}'}), 400
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM transactions WHERE transaction_code = ?', (transaction_code,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            return jsonify({'success': False, 'error': 'This transaction code has already been used'}), 400
-        
-        cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
-        movie = cursor.fetchone()
-        
-        if not movie:
-            return jsonify({'success': False, 'error': 'Movie not found'}), 404
-        
-        movie_dict = row_to_dict(movie)
-        
-        cursor.execute('''
-            INSERT INTO transactions 
-            (transaction_code, user_id, user_email, user_phone, movie_id, movie_title, 
-             mpesa_message, amount, payment_date, payment_time, status, verified_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP)
-        ''', (
-            transaction_code,
-            session['user_id'],
-            session['email'],
-            phone,
-            movie_id,
-            movie_dict['title'],
-            mpesa_message,
-            amount,
-            parsed.get('date', datetime.now().strftime('%d/%m/%y')),
-            parsed.get('time', datetime.now().strftime('%I:%M %p')),
-        ))
-        
-        transaction_id = cursor.lastrowid
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO user_access (user_id, movie_id, transaction_id, is_active)
-            VALUES (?, ?, ?, 1)
-        ''', (session['user_id'], movie_id, transaction_id))
-        
-        # ADD MOVIE TO DOWNLOADS AUTOMATICALLY
-        video_url = generate_presigned_url(movie_dict['video_key'])
-        poster_url = generate_presigned_url(movie_dict.get('poster_key'))
-        
-        movie_data = json.dumps({
-            'id': movie_dict['id'],
-            'title': movie_dict['title'],
-            'description': movie_dict.get('description', ''),
-            'poster': poster_url,
-            'year': movie_dict.get('year'),
-            'duration': movie_dict.get('duration'),
-            'url': video_url,
-            'views': movie_dict.get('views', 0),
-            'downloads': movie_dict.get('download_count', 0)
-        })
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO downloads (user_id, movie_id, movie_data, downloaded_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (session['user_id'], movie_id, movie_data))
-        
-        cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
-        cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
-        
-        conn.commit()
-        
-        # Get receipt data
-        cursor.execute('''
-            SELECT t.*, u.name as user_name, u.email
-            FROM transactions t
-            JOIN users u ON t.user_id = u.id
-            WHERE t.id = ?
-        ''', (transaction_id,))
-        
-        transaction = cursor.fetchone()
-        transaction_dict = row_to_dict(transaction)
-        
-        qr_code = generate_receipt_qr(f"""
-        B/F Cinema Receipt
-        Transaction: {transaction_code}
-        User: {transaction_dict['user_name']}
-        Movie: {movie_dict['title']}
-        Amount: KES {amount:.2f}
-        Date: {parsed.get('date', 'N/A')}
-        Time: {parsed.get('time', 'N/A')}
-        """)
-        
-        receipt = {
-            'transaction_code': transaction_code,
-            'user_name': transaction_dict['user_name'],
-            'user_email': transaction_dict['email'],
-            'user_phone': phone,
-            'movie_title': movie_dict['title'],
-            'amount': amount,
-            'date': parsed.get('date', datetime.now().strftime('%d/%m/%y')),
-            'time': parsed.get('time', datetime.now().strftime('%I:%M %p')),
-            'status': 'verified',
-            'qr_code': qr_code,
-            'receipt_id': f"BFR{transaction_id:06d}",
-            'transaction_id': transaction_id,
-            'movie_id': movie_id
-        }
-        
-        log_activity(session['user_id'], session['email'], 'payment_verified', {
-            'movie_id': movie_id,
-            'transaction_code': transaction_code,
-            'amount': amount,
-            'added_to_downloads': True
-        })
-        
-        return jsonify({
-            'success': True,
-            'message': 'Payment verified successfully! Movie added to your downloads.',
-            'receipt': receipt,
-            'transaction_id': transaction_id,
-            'movie_id': movie_id,
-            'added_to_downloads': True
-        })
-        
-    except Exception as e:
-        logger.error(f"Payment verification error: {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': f'Payment verification failed: {str(e)}'}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
+# =========== TRANSACTION & RECEIPT ENDPOINTS ===========
 @app.route('/api/transactions/<int:transaction_id>/receipt', methods=['GET'])
 def get_receipt(transaction_id):
     """Generate receipt for transaction"""
@@ -2248,7 +2828,10 @@ def get_all_transactions():
                 'payment_time': trans['payment_time'],
                 'status': trans['status'],
                 'created_at': trans['created_at'],
-                'mpesa_message': trans['mpesa_message']
+                'mpesa_message': trans['mpesa_message'],
+                'mpesa_checkout_request_id': trans.get('mpesa_checkout_request_id'),
+                'mpesa_result_code': trans.get('mpesa_result_code'),
+                'mpesa_result_desc': trans.get('mpesa_result_desc')
             })
         
         stats_dict = row_to_dict(stats)
@@ -2358,6 +2941,12 @@ def get_admin_stats():
         total_size = cursor.fetchone()[0] or 0
         storage_used_gb = round(total_size / (1024 * 1024 * 1024), 2)
         
+        cursor.execute('SELECT COUNT(*) FROM mpesa_stk_requests WHERE status = "completed"')
+        mpesa_completed = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT SUM(amount) FROM transactions WHERE status = "verified"')
+        total_revenue = cursor.fetchone()[0] or 0
+        
         cursor.execute('''
             SELECT * FROM activity_log 
             ORDER BY timestamp DESC 
@@ -2388,6 +2977,8 @@ def get_admin_stats():
                 'total_downloads': total_downloads,
                 'expired_movies': expired_movies,
                 'storage_used': storage_used_gb,
+                'mpesa_completed': mpesa_completed,
+                'total_revenue': float(total_revenue),
                 'recent_activity': activity_list
             }
         })
@@ -2415,6 +3006,7 @@ def upload_movie():
         year = request.form.get('year')
         duration = request.form.get('duration')
         free_preview = request.form.get('free_preview', 'false') == 'true'
+        price = request.form.get('price', 30.00)
         
         poster_file = request.files.get('poster')
         video_file = request.files.get('movie')
@@ -2490,13 +3082,13 @@ def upload_movie():
                         video_key, poster_key,
                         uploaded_by, uploaded_at, expires_at,
                         views, download_count, storage,
-                        file_size, file_type, free_preview, s3_url, stream_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
+                        file_size, file_type, free_preview, s3_url, stream_url, price
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?, ?)
                 """, (
                     title, description, year, duration, 
                     video_key, poster_key, uploaded_by,
                     expiry_date,
-                    video_size, file_type, free_preview, video_url, stream_url
+                    video_size, file_type, free_preview, video_url, stream_url, float(price)
                 ))
                 
                 movie_id = cursor.lastrowid
@@ -2509,7 +3101,8 @@ def upload_movie():
                     'video_key': video_key,
                     'poster_key': poster_key,
                     'video_url': video_url,
-                    'expires_at': expiry_date.isoformat()
+                    'expires_at': expiry_date.isoformat(),
+                    'price': price
                 })
                 
                 return jsonify({
@@ -2523,7 +3116,8 @@ def upload_movie():
                         'video_url': video_url,
                         'stream_url': stream_url,
                         'free_preview': free_preview,
-                        'expires_at': expiry_date.isoformat()
+                        'expires_at': expiry_date.isoformat(),
+                        'price': float(price)
                     }
                 })
                 
@@ -2551,13 +3145,13 @@ def upload_movie():
                     video_key, poster_key,
                     uploaded_by, uploaded_at, expires_at,
                     views, download_count, storage,
-                    file_size, file_type, free_preview, s3_url, stream_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?)
+                    file_size, file_type, free_preview, s3_url, stream_url, price
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, 'backblaze', ?, ?, ?, ?, ?, ?)
             """, (
                 title, description, year, duration, 
                 video_key, poster_key, uploaded_by,
                 expiry_date,
-                video_size, 'video/mp4', free_preview, video_url, stream_url
+                video_size, 'video/mp4', free_preview, video_url, stream_url, float(price)
             ))
             
             movie_id = cursor.lastrowid
@@ -2568,7 +3162,8 @@ def upload_movie():
                 'title': title,
                 'movie_id': movie_id,
                 'note': 'Backblaze B2 not available, used fallback URLs',
-                'expires_at': expiry_date.isoformat()
+                'expires_at': expiry_date.isoformat(),
+                'price': price
             })
             
             return jsonify({
@@ -2582,7 +3177,8 @@ def upload_movie():
                     'video_url': video_url,
                     'stream_url': stream_url,
                     'free_preview': free_preview,
-                    'expires_at': expiry_date.isoformat()
+                    'expires_at': expiry_date.isoformat(),
+                    'price': float(price)
                 }
             })
         
@@ -2694,7 +3290,8 @@ def get_admin_movies():
                 'stream_url': movie.get('stream_url', f"/api/stream-video/{movie['id']}"),
                 's3_url': movie.get('s3_url', ''),
                 'video_key': movie.get('video_key', ''),
-                'poster_key': movie.get('poster_key', '')
+                'poster_key': movie.get('poster_key', ''),
+                'price': float(movie.get('price', 30.00))
             })
         
         return jsonify({'success': True, 'movies': movie_list})
@@ -2881,7 +3478,8 @@ def get_user_downloads():
                         'downloads': movie.get('download_count', 0),
                         'is_active': bool(movie.get('is_active', 1)),
                         'expires_at': movie.get('expires_at'),
-                        'days_remaining': days_remaining
+                        'days_remaining': days_remaining,
+                        'price': float(movie.get('price', 30.00))
                     }
                 }
         
@@ -2916,6 +3514,7 @@ def get_user_downloads():
                             'is_active': bool(download.get('is_active', 1)),
                             'expires_at': download.get('expires_at'),
                             'days_remaining': days_remaining,
+                            'price': float(download.get('price', 30.00)),
                             **movie_data
                         }
                     }
@@ -3109,6 +3708,7 @@ def debug_db_schema():
             'has_expires_at': 'expires_at' in column_names,
             'has_s3_url': 's3_url' in column_names,
             'has_stream_url': 'stream_url' in column_names,
+            'has_price': 'price' in column_names,
             'message': 'Database schema check'
         })
     except Exception as e:
@@ -3122,7 +3722,7 @@ def debug_db_schema():
 # =========== APPLICATION START ===========
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🎬 B/F Cinema Streaming Platform - Version 2.0 (FIXED)")
+    print("🎬 B/F Cinema Streaming Platform - Version 2.1 (MPesa Integration)")
     print("="*60)
     print(f"📁 Environment: {'PRODUCTION' if RENDER else 'DEVELOPMENT'}")
     print(f"📁 Database: {get_db_path()}")
@@ -3133,6 +3733,8 @@ if __name__ == '__main__':
     print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
     print(f"🔗 B2 Bucket: {BACKBLAZE_CONFIG['bucket']}")
     print(f"📍 Endpoint: {BACKBLAZE_CONFIG['endpoint']}")
+    print(f"💰 MPesa Integration: {'✅ Configured' if MPESA_CONFIG['consumer_key'] else '❌ Not Configured'}")
+    print(f"📱 Business Shortcode: {MPESA_CONFIG['business_shortcode']}")
     print(f"🗑️  Auto-deletion: ✅ Enabled (10 months expiry)")
     print("="*60)
     
