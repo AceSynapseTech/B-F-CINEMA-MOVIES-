@@ -1,9 +1,9 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
+flask==2.3.3
+flask-cors==4.0.0
 boto3==1.28.57
 cryptography==41.0.7
 requests==2.31.0
-Werkzeug==2.3.7
-schedule==1.2.0
 python-dotenv==1.0.0
 gunicorn==21.2.0
+schedule==1.2.0
+segno==1.6.2
