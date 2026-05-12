@@ -2446,7 +2446,7 @@ def test_video():
         'message': 'Test video from Google'
     })
 
-@@app.route('/api/test-video-playback/<int:movie_id>', methods=['GET'])
+@app.route('/api/test-video-playback/<int:movie_id>', methods=['GET'])
 def test_video_playback(movie_id):
     """Test video playback for a specific movie"""
     conn = None
