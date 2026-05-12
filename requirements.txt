@@ -6,4 +6,4 @@ requests==2.31.0
 python-dotenv==1.0.0
 gunicorn==21.2.0
 schedule==1.2.0
-segno==1.6.2
+segno>=1.6.0
