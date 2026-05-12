@@ -1625,6 +1625,71 @@
             100% { transform: rotate(360deg); }
         }
         
+        /* =========== MODERN PAYMENT BUTTON (ADDED) =========== */
+        .payment-redirect-container {
+            text-align: center;
+            padding: 20px;
+        }
+        .pay-now-btn-redirect {
+            background: linear-gradient(135deg, #e50914, #b20710);
+            border: none;
+            color: white;
+            font-size: 1.2rem;
+            font-weight: 700;
+            padding: 14px 28px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.3s, box-shadow 0.3s;
+            box-shadow: 0 8px 20px rgba(229,9,20,0.5);
+            width: 100%;
+            max-width: 300px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .pay-now-btn-redirect:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 28px rgba(229,9,20,0.7);
+        }
+        .pay-now-btn-redirect.loading {
+            animation: btnPulse 1s infinite;
+            pointer-events: none;
+        }
+        @keyframes btnPulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(0.98); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        .payment-badges {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .badge-icon {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(4px);
+            padding: 6px 14px;
+            border-radius: 40px;
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .secure-message {
+            background: rgba(0,0,0,0.4);
+            padding: 12px 20px;
+            border-radius: 40px;
+            margin-bottom: 20px;
+            display: inline-block;
+            backdrop-filter: blur(4px);
+            font-size: 0.9rem;
+        }
+        
         /* =========== RESPONSIVE MEDIA QUERIES =========== */
         @media (max-width: 1200px) {
             .movies-grid {
@@ -1924,107 +1989,30 @@
         </div>
     </div>
 
-    <!-- NEW: Enhanced Payment Modal -->
+    <!-- UPDATED: MODERN PAYMENT MODAL - REDIRECT SYSTEM -->
     <div class="modal" id="payment-modal">
-        <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-content" style="max-width: 550px;">
             <div class="modal-header">
-                <h3 class="modal-title"><i class="fas fa-shopping-cart"></i> Purchase Movie</h3>
+                <h3 class="modal-title"><i class="fas fa-lock"></i> Secure Payment</h3>
                 <button class="close-modal" id="close-payment">&times;</button>
             </div>
-            <div class="modal-body">
-                <!-- Step Indicator -->
-                <div class="payment-steps" style="display: flex; justify-content: space-between; margin-bottom: 30px; position: relative;">
-                    <div class="step active" data-step="1" style="text-align: center; flex: 1; position: relative; z-index: 1;">
-                        <div class="step-circle" style="width: 40px; height: 40px; background: var(--primary); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; font-weight: bold;">1</div>
-                        <div class="step-label" style="font-size: 0.9rem; color: var(--primary);">Send Money</div>
-                    </div>
-                    <div class="step" data-step="2" style="text-align: center; flex: 1; position: relative; z-index: 1;">
-                        <div class="step-circle" style="width: 40px; height: 40px; background: var(--text-gray); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; font-weight: bold;">2</div>
-                        <div class="step-label" style="font-size: 0.9rem; color: var(--text-gray);">Paste Message</div>
-                    </div>
-                    <div class="step" data-step="3" style="text-align: center; flex: 1; position: relative; z-index: 1;">
-                        <div class="step-circle" style="width: 40px; height: 40px; background: var(--text-gray); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; font-weight: bold;">3</div>
-                        <div class="step-label" style="font-size: 0.9rem; color: var(--text-gray);">Get Receipt</div>
-                    </div>
-                    <div style="position: absolute; top: 20px; left: 20px; right: 20px; height: 2px; background: var(--text-gray); z-index: 0;"></div>
+            <div class="modal-body" style="text-align: center;">
+                <div class="secure-message">
+                    <i class="fas fa-shield-alt" style="margin-right: 8px;"></i> 
+                    You will be redirected securely to complete your payment via M-PESA STK Push.
                 </div>
-                
-                <div class="payment-instructions">
-                    <div id="step-1-content">
-                        <h4 style="color: var(--primary); margin-bottom: 15px;">
-                            <i class="fas fa-mobile-alt"></i> Step 1: Send Money via MPesa
-                        </h4>
-                        <div style="background: rgba(46, 204, 113, 0.1); padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                            <p><strong>Follow these steps:</strong></p>
-                            <ol style="margin-left: 20px; margin-top: 10px;">
-                                <li>Go to MPesa on your phone</li>
-                                <li>Select <strong>"Lipa Na M-Pesa"</strong></li>
-                                <li>Select <strong>"Buy Goods And Services"</strong></li>
-                                <li>Enter Till No: <strong style="color: var(--primary); font-size: 1.2rem;">7048202</strong></li>
-                                
-                                <li>Enter Amount: <strong style="color: var(--primary);">KES 30</strong></li>
-                                <li>Enter your MPesa PIN and send</li>
-                                <li>Wait for confirmation message</li>
-                            </ol>
-                        </div>
-                        
-                        <div style="text-align: center; margin: 20px 0;">
-                            <button class="btn btn-primary" id="next-step-btn" style="min-width: 150px;">
-                                <i class="fas fa-arrow-right"></i> Next Step
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div id="step-2-content" style="display: none;">
-                        <h4 style="color: var(--primary); margin-bottom: 15px;">
-                            <i class="fas fa-paste"></i> Step 2: Paste MPesa Message
-                        </h4>
-                        
-                        <form id="payment-form">
-                            <input type="hidden" id="payment-movie-id">
-                            <input type="hidden" id="payment-movie-title">
-                            
-                            <div class="form-group">
-                                <label class="form-label">Your Phone Number</label>
-                                <input type="tel" class="form-control" id="payment-phone" 
-                                       placeholder="2547XXXXXXXX" required>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label class="form-label">Transaction Code *</label>
-                                <input type="text" class="form-control" id="transaction-code" 
-                                       placeholder="Enter the transaction code from MPesa (e.g., UA7QM35P3M)" 
-                                       pattern="[A-Z0-9]{10}" 
-                                       title="Enter the 10-character transaction code" required>
-                                <small style="color: var(--text-gray); display: block; margin-top: 5px;">
-                                    Example: UA7QM35P3M
-                                </small>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label class="form-label">Complete MPesa Message *</label>
-                                <textarea class="form-control" id="mpesa-message" rows="4" 
-                                          placeholder="Paste the complete MPesa message here...
-Example: 
-UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 AM. New M-PESA balance is Ksh1,230.00." required></textarea>
-                                <small style="color: var(--text-gray); display: block; margin-top: 5px;">
-                                    Copy the entire message from your MPesa SMS
-                                </small>
-                            </div>
-                            
-                            <div id="payment-status" style="margin: 15px 0;"></div>
-                            
-                            <div style="display: flex; justify-content: space-between; margin-top: 20px;">
-                                <button type="button" class="btn btn-secondary" id="prev-step-btn">
-                                    <i class="fas fa-arrow-left"></i> Previous
-                                </button>
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-check-circle"></i> Verify Payment
-                                </button>
-                            </div>
-                        </form>
-                    </div>
+                <div class="payment-redirect-container">
+                    <button class="pay-now-btn-redirect" id="proceed-payment-redirect">
+                        <i class="fas fa-arrow-right"></i> Proceed to Secure Payment
+                    </button>
                 </div>
+                <div class="payment-badges">
+                    <span class="badge-icon"><i class="fab fa-cc-visa"></i> Visa</span>
+                    <span class="badge-icon"><i class="fab fa-cc-mastercard"></i> Mastercard</span>
+                    <span class="badge-icon"><i class="fas fa-mobile-alt"></i> M-PESA</span>
+                    <span class="badge-icon"><i class="fas fa-lock"></i> SSL Secure</span>
+                </div>
+                <p style="font-size: 0.7rem; margin-top: 20px; opacity: 0.6;">Powered by Lipana Payments | Instant STK Push</p>
             </div>
         </div>
     </div>
@@ -3059,7 +3047,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         // Form submissions
         document.getElementById('login-form').addEventListener('submit', handleUserLogin);
         document.getElementById('register-form').addEventListener('submit', handleUserRegister);
-        document.getElementById('payment-form').addEventListener('submit', handlePayment);
+        // Payment form is removed - using redirect instead
         document.getElementById('change-password-form')?.addEventListener('submit', handleChangePassword);
         
         // Modal switching
@@ -3178,32 +3166,14 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         // Setup file upload handlers
         setupFileUploadHandlers();
         
-        // Payment step buttons
-        const nextStepBtn = document.getElementById('next-step-btn');
-        if (nextStepBtn) {
-            nextStepBtn.addEventListener('click', function() {
-                document.getElementById('step-1-content').style.display = 'none';
-                document.getElementById('step-2-content').style.display = 'block';
-                document.querySelectorAll('.step').forEach(step => {
-                    step.classList.remove('active');
-                });
-                document.querySelector('.step[data-step="2"]').classList.add('active');
-                document.querySelector('.step[data-step="1"] .step-circle').style.background = '#2ecc71';
-                document.querySelector('.step[data-step="2"] .step-circle').style.background = 'var(--primary)';
-            });
-        }
-        
-        const prevStepBtn = document.getElementById('prev-step-btn');
-        if (prevStepBtn) {
-            prevStepBtn.addEventListener('click', function() {
-                document.getElementById('step-2-content').style.display = 'none';
-                document.getElementById('step-1-content').style.display = 'block';
-                document.querySelectorAll('.step').forEach(step => {
-                    step.classList.remove('active');
-                });
-                document.querySelector('.step[data-step="1"]').classList.add('active');
-                document.querySelector('.step[data-step="1"] .step-circle').style.background = 'var(--primary)';
-                document.querySelector('.step[data-step="2"] .step-circle').style.background = 'var(--text-gray)';
+        // NEW: Payment redirect button
+        const proceedBtn = document.getElementById('proceed-payment-redirect');
+        if (proceedBtn) {
+            proceedBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                this.classList.add('loading');
+                // Redirect to payment link
+                window.location.href = 'https://lipana.dev/pay/bf-cinema-movies';
             });
         }
         
@@ -4055,229 +4025,47 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
         showLoading(false);
     }
 
-    // =========== PAYMENT FUNCTIONS ===========
+    // =========== UPDATED: showPaymentModal with redirect ===========
     function showPaymentModal(movieId, movieTitle) {
         const title = document.querySelector('#payment-modal .modal-title');
-        
-        if (title) title.textContent = `Purchase: ${movieTitle}`;
-        document.getElementById('payment-movie-id').value = movieId;
-        document.getElementById('payment-movie-title').value = movieTitle;
-        document.getElementById('payment-phone').value = currentUser?.phone || '';
-        document.getElementById('mpesa-message').value = '';
-        document.getElementById('payment-status').innerHTML = '';
-        
-        // Reset to step 1
-        document.getElementById('step-1-content').style.display = 'block';
-        document.getElementById('step-2-content').style.display = 'none';
-        document.querySelectorAll('.step').forEach(step => {
-            step.classList.remove('active');
-        });
-        document.querySelector('.step[data-step="1"]').classList.add('active');
-        document.querySelector('.step[data-step="1"] .step-circle').style.background = 'var(--primary)';
-        document.querySelector('.step[data-step="2"] .step-circle').style.background = 'var(--text-gray)';
-        document.querySelector('.step[data-step="3"] .step-circle').style.background = 'var(--text-gray)';
-        
+        if (title) title.innerHTML = `<i class="fas fa-lock"></i> Complete Purchase: ${movieTitle}`;
         showModal(paymentModal);
     }
 
-    // UPDATED: Handle payment with downloads refresh
-    async function handlePayment(e) {
-        e.preventDefault();
-        
-        const movieId = document.getElementById('payment-movie-id').value;
-        const movieTitle = document.getElementById('payment-movie-title').value;
-        const phone = document.getElementById('payment-phone').value.trim();
-        const transactionCode = document.getElementById('transaction-code').value.trim().toUpperCase();
-        const mpesaMessage = document.getElementById('mpesa-message').value.trim();
-        
-        // Validate phone number format (254XXXXXXXXX)
-        const phoneRegex = /^254[17]\d{8}$/;
-        if (!phoneRegex.test(phone)) {
-            showNotification('Please enter a valid MPesa phone number (format: 2547XXXXXXXX)', 'error');
-            return;
-        }
-        
-        // Validate transaction code format
-        const codeRegex = /^[A-Z0-9]{10}$/;
-        if (!codeRegex.test(transactionCode)) {
-            showNotification('Transaction code must be exactly 10 characters (letters and numbers)', 'error');
-            return;
-        }
-        
-        if (!mpesaMessage) {
-            showNotification('Please paste the MPesa message', 'error');
-            return;
-        }
-        
-        // Check if message contains required elements
-        if (!mpesaMessage.includes('Confirmed') || !mpesaMessage.includes('Ksh')) {
-            showNotification('Invalid MPesa message format. Please paste the complete message from MPesa.', 'error');
-            return;
-        }
-        
-        showLoading(true);
-        
-        try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/movies/${movieId}/verify-payment`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    phone: phone,
-                    transaction_code: transactionCode,
-                    mpesa_message: mpesaMessage
-                }),
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showNotification('Payment verified successfully! Movie added to your downloads.', 'success');
-                
-                // Show receipt
-                showReceipt(data.receipt);
-                
-                // Close payment modal
-                hideModal(paymentModal);
-                
-                // IMPORTANT: Reload movies and downloads
-                setTimeout(() => {
-                    loadMovies();
-                    loadDownloads();
-                    
-                    // Update profile stats
-                    updateProfileStats();
-                    
-                    // If user is on downloads section, refresh it
-                    const currentSection = document.querySelector('.menu-item.active');
-                    if (currentSection && currentSection.dataset.section === 'downloads') {
-                        loadDownloads();
-                    }
-                }, 1000);
-                
-            } else {
-                document.getElementById('payment-status').innerHTML = `
-                    <div style="color: var(--primary); padding: 15px; background: rgba(229, 9, 20, 0.1); border-radius: 8px; border: 1px solid var(--primary);">
-                        <strong><i class="fas fa-exclamation-triangle"></i> Verification Failed:</strong><br>
-                        ${data.error}
-                    </div>
-                `;
-                showNotification('Payment verification failed: ' + data.error, 'error');
-            }
-        } catch (err) {
-            console.error('Payment error:', err);
-            document.getElementById('payment-status').innerHTML = `
-                <div style="color: var(--danger); padding: 15px; background: rgba(231, 76, 60, 0.1); border-radius: 8px; border: 1px solid var(--danger);">
-                    <strong><i class="fas fa-exclamation-circle"></i> Network Error:</strong><br>
-                    Please check your internet connection and try again.
-                </div>
-            `;
-            showNotification('Network error. Please try again.', 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    // UPDATED: Show receipt with Go to Downloads button
+    // Receipt function (kept for compatibility, but payment is now redirect)
     function showReceipt(receiptData) {
         const receiptContent = document.getElementById('receipt-content');
-        
-        // Generate receipt HTML
         receiptContent.innerHTML = `
             <div style="max-width: 500px; margin: 0 auto; padding: 20px; border: 2px solid #333; font-family: 'Courier New', monospace; background: white; color: #333;">
                 <div style="text-align: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #333;">
                     <h2 style="margin: 0; color: var(--primary); letter-spacing: 2px;">B/F CINEMA</h2>
-                    <p style="margin: 5px 0; font-weight: bold;">Official Receipt</p>
-                    <p style="margin: 5px 0; font-size: 0.9em; color: #666;">Receipt ID: ${receiptData.receipt_id}</p>
+                    <p style="margin: 5px 0; font-weight: bold;">Payment Redirected</p>
+                    <p style="margin: 5px 0; font-size: 0.9em; color: #666;">Receipt ID: ${receiptData?.receipt_id || 'REDIRECT-' + Date.now()}</p>
                 </div>
-                
-                <div style="margin-bottom: 15px;">
-                    <p style="margin: 5px 0;"><strong>Transaction Code:</strong> ${receiptData.transaction_code}</p>
-                    <p style="margin: 5px 0;"><strong>Date:</strong> ${receiptData.date}</p>
-                    <p style="margin: 5px 0;"><strong>Time:</strong> ${receiptData.time}</p>
-                    <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: green; font-weight: bold;">PAID ✓</span></p>
+                <div style="text-align: center; padding: 20px;">
+                    <i class="fas fa-check-circle" style="font-size: 4rem; color: green;"></i>
+                    <h3>Payment Initiated via Lipana</h3>
+                    <p>You have been redirected to complete your payment securely.</p>
+                    <p>Check your phone for M-PESA STK Push prompt.</p>
                 </div>
-                
-                <div style="margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
-                    <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid #ddd; padding-bottom: 5px;">MOVIE PURCHASED</h4>
-                    <p style="margin: 5px 0;"><strong>Title:</strong> ${receiptData.movie_title}</p>
-                    <p style="margin: 5px 0;"><strong>Amount:</strong> KES ${receiptData.amount.toFixed(2)}</p>
-                    <p style="margin: 5px 0; color: var(--success); font-weight: bold;">
-                        <i class="fas fa-check-circle"></i> Added to your Downloads
-                    </p>
-                </div>
-                
-                <div style="margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
-                    <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid #ddd; padding-bottom: 5px;">CUSTOMER DETAILS</h4>
-                    <p style="margin: 5px 0;"><strong>Name:</strong> ${receiptData.user_name}</p>
-                    <p style="margin: 5px 0;"><strong>Email:</strong> ${receiptData.user_email}</p>
-                    <p style="margin: 5px 0;"><strong>Phone:</strong> ${receiptData.user_phone}</p>
-                </div>
-                
-                ${receiptData.qr_code ? `
-                <div style="text-align: center; margin: 20px 0; padding: 15px; border-top: 1px dashed #333; border-bottom: 1px dashed #333;">
-                    <h4 style="margin: 0 0 10px 0;">RECEIPT QR CODE</h4>
-                    <img src="${receiptData.qr_code}" alt="QR Code" style="width: 150px; height: 150px; border: 1px solid #ddd;">
-                    <p style="margin: 10px 0 0 0; font-size: 0.8em; color: #666;">Scan to verify receipt</p>
-                </div>
-                ` : ''}
-                
                 <div style="text-align: center; margin-top: 20px; font-size: 0.9em; color: #666; border-top: 1px solid #ddd; padding-top: 15px;">
-                    <p style="color: var(--success); font-weight: bold;">
-                        <i class="fas fa-check-circle"></i> Your movie is now available in Downloads
-                    </p>
                     <p>For support: bfCinemamovies@gmail.com | +254 700 505325</p>
                 </div>
             </div>
         `;
         
-        // Set up buttons
         const printBtn = document.getElementById('print-receipt-btn');
         const watchBtn = document.getElementById('watch-movie-btn');
         const downloadsBtn = document.getElementById('go-to-downloads-btn');
         
-        if (printBtn) {
-            printBtn.onclick = () => {
-                window.print();
-            };
-        }
+        if (printBtn) printBtn.onclick = () => window.print();
+        if (watchBtn) watchBtn.onclick = () => { hideModal(receiptModal); };
+        if (downloadsBtn) downloadsBtn.onclick = () => { hideModal(receiptModal); showOnlySection('downloads'); loadDownloads(); };
         
-        if (watchBtn) {
-            watchBtn.onclick = () => {
-                hideModal(receiptModal);
-                // Find and play the movie
-                const movie = movies.find(m => m.id == receiptData.movie_id);
-                if (movie) {
-                    showVideoPlayer(movie);
-                }
-            };
-        }
-        
-        if (downloadsBtn) {
-            downloadsBtn.onclick = () => {
-                hideModal(receiptModal);
-                // Switch to downloads section
-                showOnlySection('downloads');
-                // Refresh downloads
-                loadDownloads();
-                // Update menu active state
-                document.querySelectorAll('.menu-item[data-section]').forEach(item => {
-                    item.classList.remove('active');
-                    if (item.dataset.section === 'downloads') {
-                        item.classList.add('active');
-                    }
-                });
-            };
-        }
-        
-        // Show receipt modal
         showModal(receiptModal);
     }
 
-    // =========== UPDATED LOAD MOVIES FUNCTION ===========
+    // =========== LOAD MOVIES FUNCTION ===========
     async function loadMovies() {
         console.log('Loading movies from Backblaze...');
         const container = document.getElementById('movies-container');
@@ -4304,7 +4092,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 container.innerHTML = '';
                 
                 data.movies.forEach(movie => {
-                    // Check if poster exists
                     const posterUrl = movie.poster || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80';
                     
                     const movieCard = document.createElement('div');
@@ -4333,7 +4120,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     container.appendChild(movieCard);
                 });
                 
-                // Add event listeners
                 container.querySelectorAll('.watch-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
                         const movieId = btn.dataset.id;
@@ -4395,80 +4181,39 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>
-                            <img src="${movie.poster_url}" 
-                                 alt="${movie.title}" 
-                                 style="width: 60px; height: 80px; object-fit: cover; border-radius: 5px;"
-                                 onerror="this.src='https://via.placeholder.com/60x80?text=No+Poster'">
+                            <img src="${movie.poster_url}" alt="${movie.title}" style="width: 60px; height: 80px; object-fit: cover; border-radius: 5px;" onerror="this.src='https://via.placeholder.com/60x80?text=No+Poster'">
                         </td>
                         <td><strong>${movie.title}</strong></td>
-                        <td style="max-width: 200px; font-size: 0.9rem;">
-                            ${movie.description ? movie.description.substring(0, 100) + (movie.description.length > 100 ? '...' : '') : 'No description'}
-                        </td>
+                        <td style="max-width: 200px; font-size: 0.9rem;">${movie.description ? movie.description.substring(0, 100) + (movie.description.length > 100 ? '...' : '') : 'No description'}</td>
                         <td>${movie.year || 'N/A'}</td>
                         <td>${movie.views || 0}</td>
                         <td>${movie.downloads || 0}</td>
                         <td><span class="badge">${movie.storage || 'backblaze'}</span></td>
-                        <td>
-                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                <button class="btn btn-danger btn-sm delete-movie-btn" data-id="${movie.id}">
-                                    <i class="fas fa-trash"></i> Delete
-                                </button>
-                            </div>
-                        </td>
+                        <td><button class="btn btn-danger btn-sm delete-movie-btn" data-id="${movie.id}"><i class="fas fa-trash"></i> Delete</button></td>
                     `;
                     tbody.appendChild(row);
                 });
                 
-                // Add delete event listeners
                 tbody.querySelectorAll('.delete-movie-btn').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        const movieId = btn.dataset.id;
-                        deleteMovie(movieId);
-                    });
+                    btn.addEventListener('click', () => deleteMovie(btn.dataset.id));
                 });
             } else {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                            <i class="fas fa-film" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                            <h3>No Movies Found</h3>
-                            <p>Upload your first movie in the Uploads section</p>
-                        </td>
-                    </tr>
-                `;
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px;">No Movies Found</td></tr>`;
             }
         } catch (err) {
             console.error('Failed to load admin movies:', err);
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                        <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                        <h3>Failed to Load Movies</h3>
-                        <p>${err.message}</p>
-                    </td>
-                </tr>
-            `;
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px;">Failed to Load Movies</td></tr>`;
         } finally {
             showLoading(false);
         }
     }
 
     async function deleteMovie(movieId) {
-        if (!confirm('Are you sure you want to delete this movie?')) {
-            return;
-        }
-        
+        if (!confirm('Are you sure you want to delete this movie?')) return;
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/movies/${movieId}`, {
-                method: 'DELETE',
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/movies/${movieId}`, { method: 'DELETE', credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
                 showNotification('Movie deleted successfully', 'success');
                 loadMovies();
@@ -4478,45 +4223,7 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 showNotification(data.error || 'Failed to delete movie', 'error');
             }
         } catch (err) {
-            console.error(err);
-            showNotification('Server error. Please try again later.', 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function downloadMovie(movieId) {
-        if (!currentUser) {
-            showNotification('Please login to download movies', 'error');
-            return;
-        }
-        
-        if (isAdmin) {
-            showNotification('Admin cannot download movies', 'error');
-            return;
-        }
-        
-        showLoading(true);
-        
-        try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/movies/${movieId}/download`, {
-                method: 'POST',
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showNotification('Download recorded successfully!', 'success');
-                loadDownloads();
-                updateProfileStats();
-            } else {
-                showNotification(data.error || 'Failed to download movie', 'error');
-            }
-        } catch (err) {
-            console.error(err);
-            showNotification('Server error. Please try again later.', 'error');
+            showNotification('Server error', 'error');
         } finally {
             showLoading(false);
         }
@@ -4525,116 +4232,63 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== USER DATA FUNCTIONS ===========
     function loadUserData() {
         if (!currentUser) return;
-        
-        const menuUserName = document.getElementById('menu-user-name');
-        const menuUserEmail = document.getElementById('menu-user-email');
-        const profileAvatar = document.getElementById('profile-avatar');
-        const profileName = document.getElementById('profile-name');
-        const profileEmail = document.getElementById('profile-email');
-        const profilePhone = document.getElementById('profile-phone');
-        const memberSince = document.getElementById('member-since');
-        
-        if (menuUserName) menuUserName.textContent = currentUser.name;
-        if (menuUserEmail) menuUserEmail.textContent = currentUser.email;
-        if (profileAvatar) profileAvatar.textContent = currentUser.name.charAt(0).toUpperCase();
-        if (profileName) profileName.textContent = currentUser.name;
-        if (profileEmail) profileEmail.textContent = currentUser.email;
-        if (profilePhone) profilePhone.textContent = currentUser.phone || 'N/A';
-        
-        if (memberSince && currentUser.createdAt) {
-            const joinDate = new Date(currentUser.createdAt);
-            memberSince.textContent = joinDate.toLocaleDateString();
-            
-            const today = new Date();
-            const diffTime = Math.abs(today - joinDate);
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            const accountAge = document.getElementById('account-age');
-            if (accountAge) accountAge.textContent = diffDays;
+        document.getElementById('menu-user-name').textContent = currentUser.name;
+        document.getElementById('menu-user-email').textContent = currentUser.email;
+        document.getElementById('profile-avatar').textContent = currentUser.name.charAt(0).toUpperCase();
+        document.getElementById('profile-name').textContent = currentUser.name;
+        document.getElementById('profile-email').textContent = currentUser.email;
+        document.getElementById('profile-phone').textContent = currentUser.phone || 'N/A';
+        if (currentUser.createdAt) {
+            document.getElementById('member-since').textContent = new Date(currentUser.createdAt).toLocaleDateString();
+            const days = Math.ceil((Date.now() - new Date(currentUser.createdAt)) / (1000 * 60 * 60 * 24));
+            document.getElementById('account-age').textContent = days;
         }
-        
         updateProfileStats();
     }
 
     async function updateProfileStats() {
         if (!currentUser || isAdmin) return;
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/user/profile`, {
-                method: 'GET',
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/user/profile`, { credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
-                const user = data.user;
-                const moviesWatched = document.getElementById('movies-watched');
-                const downloadsCount = document.getElementById('downloads-count');
-                
-                if (moviesWatched) moviesWatched.textContent = user.moviesWatched || 0;
-                if (downloadsCount) downloadsCount.textContent = user.downloads || 0;
+                document.getElementById('movies-watched').textContent = data.user.moviesWatched || 0;
+                document.getElementById('downloads-count').textContent = data.user.downloads || 0;
             }
-        } catch (err) {
-            console.error('Failed to update profile stats:', err);
-        }
+        } catch (err) { console.error(err); }
     }
 
     async function loadDownloads() {
         if (!currentUser || isAdmin) return;
-        
         const container = document.getElementById('downloads-container');
         const noDownloads = document.getElementById('no-downloads');
-        
-        if (!container || !noDownloads) return;
-        
+        if (!container) return;
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/user/downloads`, {
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/user/downloads`, { credentials: 'include' });
             const data = await response.json();
-            
-            if (data.success && data.downloads && data.downloads.length > 0) {
+            if (data.success && data.downloads?.length > 0) {
                 container.style.display = 'grid';
                 noDownloads.style.display = 'none';
                 container.innerHTML = '';
-                
                 data.downloads.forEach(download => {
                     const movie = download.movieData;
-                    const downloadCard = document.createElement('div');
-                    downloadCard.className = 'movie-card';
-                    downloadCard.innerHTML = `
-                        <img src="${movie.poster}" alt="${movie.title}" class="movie-poster" 
-                             onerror="this.src='https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80'">
+                    const card = document.createElement('div');
+                    card.className = 'movie-card';
+                    card.innerHTML = `
+                        <img src="${movie.poster}" class="movie-poster" onerror="this.src='https://images.unsplash.com/photo-1536440136628-849c177e76a1?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80'">
                         <div class="movie-info">
                             <h3 class="movie-title">${movie.title}</h3>
-                            <div class="movie-meta">
-                                <span>${movie.year || 'N/A'}</span>
-                                <span>${movie.duration || '120 min'}</span>
-                            </div>
-                            <p style="color: var(--text-gray); font-size: 0.9rem; margin-top: 10px;">
-                                Downloaded: ${new Date(download.downloadedAt).toLocaleDateString()}
-                            </p>
-                            <div class="movie-actions">
-                                <button class="btn btn-primary watch-download-btn" data-id="${download.movieId}">
-                                    <i class="fas fa-play"></i> Watch
-                                </button>
-                            </div>
+                            <div class="movie-meta"><span>${movie.year || 'N/A'}</span><span>${movie.duration || '120 min'}</span></div>
+                            <p style="font-size:0.9rem;">Downloaded: ${new Date(download.downloadedAt).toLocaleDateString()}</p>
+                            <button class="btn btn-primary watch-download-btn" data-id="${download.movieId}"><i class="fas fa-play"></i> Watch</button>
                         </div>
                     `;
-                    
-                    container.appendChild(downloadCard);
+                    container.appendChild(card);
                 });
-                
                 container.querySelectorAll('.watch-download-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
-                        const movieId = btn.dataset.id;
-                        // Find the movie from our movies array
-                        const movie = movies.find(m => m.id == movieId);
+                        const movie = movies.find(m => m.id == btn.dataset.id);
                         if (movie) showVideoPlayer(movie);
                     });
                 });
@@ -4643,7 +4297,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 noDownloads.style.display = 'block';
             }
         } catch (err) {
-            console.error('Failed to load downloads:', err);
             container.style.display = 'none';
             noDownloads.style.display = 'block';
         } finally {
@@ -4653,39 +4306,19 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
 
     async function handleChangePassword(e) {
         e.preventDefault();
-        
-        const currentPassword = document.getElementById('current-password').value;
-        const newPassword = document.getElementById('new-password').value;
-        const confirmNewPassword = document.getElementById('confirm-new-password').value;
-        
-        if (newPassword !== confirmNewPassword) {
-            showNotification('New passwords do not match', 'error');
-            return;
-        }
-        
-        if (newPassword.length < 6) {
-            showNotification('New password must be at least 6 characters', 'error');
-            return;
-        }
-        
+        const current = document.getElementById('current-password').value;
+        const newPass = document.getElementById('new-password').value;
+        const confirm = document.getElementById('confirm-new-password').value;
+        if (newPass !== confirm) { showNotification('New passwords do not match', 'error'); return; }
+        if (newPass.length < 6) { showNotification('Password must be at least 6 characters', 'error'); return; }
         showLoading(true);
-        
         try {
             const response = await fetch(`${SERVER_ENDPOINT}/api/user/change-password`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    current_password: currentPassword,
-                    new_password: newPassword
-                }),
-                credentials: 'include',
-                mode: 'cors'
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ current_password: current, new_password: newPass }),
+                credentials: 'include'
             });
-            
             const data = await response.json();
-            
             if (data.success) {
                 showNotification('Password changed successfully', 'success');
                 e.target.reset();
@@ -4693,7 +4326,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
                 showNotification(data.error || 'Failed to change password', 'error');
             }
         } catch (err) {
-            console.error('Change password error:', err);
             showNotification('Failed to change password', 'error');
         } finally {
             showLoading(false);
@@ -4703,392 +4335,139 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     // =========== ADMIN DATA FUNCTIONS ===========
     async function refreshAdminData() {
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/stats`, {
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/stats`, { credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
-                const stats = data.stats;
-                
-                // Update statistics
-                const totalMovies = document.getElementById('total-movies-admin');
-                const totalUsers = document.getElementById('total-users-admin');
-                const totalDownloads = document.getElementById('total-downloads-admin');
-                const storageUsed = document.getElementById('storage-used-admin');
-                
-                if (totalMovies) totalMovies.textContent = stats.total_movies;
-                if (totalUsers) totalUsers.textContent = stats.total_users;
-                if (totalDownloads) totalDownloads.textContent = stats.total_downloads;
-                if (storageUsed) storageUsed.textContent = `${stats.storage_used} GB`;
-                
-                // Update activity table
+                document.getElementById('total-movies-admin').textContent = data.stats.total_movies;
+                document.getElementById('total-users-admin').textContent = data.stats.total_users;
+                document.getElementById('total-downloads-admin').textContent = data.stats.total_downloads;
+                document.getElementById('storage-used-admin').textContent = `${data.stats.storage_used} GB`;
                 const activityTable = document.getElementById('activity-table');
                 if (activityTable) {
                     activityTable.innerHTML = '';
-                    
-                    if (stats.recent_activity && stats.recent_activity.length > 0) {
-                        stats.recent_activity.forEach(activity => {
-                            const row = document.createElement('tr');
-                            row.innerHTML = `
-                                <td>${new Date(activity.time).toLocaleString()}</td>
-                                <td>${activity.action}</td>
-                                <td>${activity.user}</td>
-                                <td>${typeof activity.details === 'object' ? JSON.stringify(activity.details) : activity.details}</td>
-                            `;
-                            activityTable.appendChild(row);
+                    if (data.stats.recent_activity?.length) {
+                        data.stats.recent_activity.forEach(activity => {
+                            activityTable.innerHTML += `<tr><td>${new Date(activity.time).toLocaleString()}</td><td>${activity.action}</td><td>${activity.user}</td><td>${typeof activity.details === 'object' ? JSON.stringify(activity.details) : activity.details}</td></tr>`;
                         });
                     } else {
-                        activityTable.innerHTML = `
-                            <tr><td colspan="4" style="text-align: center; padding: 20px; color: var(--text-gray);">No recent activity</td></tr>
-                        `;
+                        activityTable.innerHTML = '<tr><td colspan="4" style="text-align:center;">No recent activity</td></tr>';
                     }
                 }
-            } else {
-                if (data.error === 'Admin access required') {
-                    showNotification('Admin session expired. Please login again.', 'error');
-                    handleLogout();
-                }
+            } else if (data.error === 'Admin access required') {
+                showNotification('Admin session expired', 'error');
+                handleLogout();
             }
-        } catch (err) {
-            console.error('Failed to refresh admin data:', err);
-        } finally {
-            showLoading(false);
-            updateCurrentDate();
-        }
+        } catch (err) { console.error(err); }
+        finally { showLoading(false); updateCurrentDate(); }
     }
 
     async function loadUsersTable() {
         const tbody = document.getElementById('users-table-body');
         if (!tbody) return;
-        
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users`, {
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users`, { credentials: 'include' });
             const data = await response.json();
-            
             tbody.innerHTML = '';
-            
-            if (data.success && data.users && data.users.length > 0) {
+            if (data.success && data.users?.length) {
                 data.users.forEach(user => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${user.id}</td>
-                        <td>${user.name}</td>
-                        <td>${user.email}</td>
-                        <td>${user.phone || 'N/A'}</td>
-                        <td>${new Date(user.joined).toLocaleDateString()}</td>
-                        <td>${user.downloads}</td>
-                        <td>
-                            <button class="btn btn-danger btn-sm delete-user-btn" data-id="${user.id}">
-                                <i class="fas fa-trash"></i> Delete
-                            </button>
-                        </td>
-                    `;
-                    tbody.appendChild(row);
+                    tbody.innerHTML += `<tr><td>${user.id}</td><td>${user.name}</td><td>${user.email}</td><td>${user.phone || 'N/A'}</td><td>${new Date(user.joined).toLocaleDateString()}</td><td>${user.downloads}</td><td><button class="btn btn-danger btn-sm delete-user-btn" data-id="${user.id}">Delete</button></td></tr>`;
                 });
-                
-                // Add delete event listeners
-                tbody.querySelectorAll('.delete-user-btn').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        const userId = btn.dataset.id;
-                        deleteUser(userId);
-                    });
-                });
+                document.querySelectorAll('.delete-user-btn').forEach(btn => btn.addEventListener('click', () => deleteUser(btn.dataset.id)));
             } else {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                            <i class="fas fa-users" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                            <h3>No Users Found</h3>
-                        </td>
-                    </tr>
-                `;
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No Users Found</td></tr>';
             }
-        } catch (err) {
-            console.error('Failed to load users:', err);
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                        <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                        <h3>Failed to Load Users</h3>
-                        <p>${err.message}</p>
-                    </td>
-                </tr>
-            `;
-        } finally {
-            showLoading(false);
-        }
+        } catch (err) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Failed to Load Users</td></tr>'; }
+        finally { showLoading(false); }
     }
 
     function loadStorageStats() {
-        const moviesCount = document.getElementById('movies-count-admin');
-        const storageTotal = document.getElementById('storage-total-admin');
-        const storageFree = document.getElementById('storage-free-admin');
-        const storageCost = document.getElementById('storage-cost-admin');
-        
-        // Get movie count from loaded movies
-        if (moviesCount) moviesCount.textContent = movies.length;
-        if (storageTotal) storageTotal.textContent = '10 GB';
-        
-        if (storageFree) {
-            const usedGB = movies.length * 0.5; // Average 500MB per movie
-            const freeGB = 10 - usedGB;
-            storageFree.textContent = `${freeGB.toFixed(1)} GB`;
-        }
-        
-        if (storageCost) {
-            const usedGB = movies.length * 0.5;
-            const monthlyCost = usedGB * 0.005; // $0.005 per GB
-            storageCost.textContent = `$${monthlyCost.toFixed(2)}`;
-        }
+        document.getElementById('movies-count-admin').textContent = movies.length;
+        document.getElementById('storage-total-admin').textContent = '10 GB';
+        const usedGB = movies.length * 0.5;
+        document.getElementById('storage-free-admin').textContent = `${(10 - usedGB).toFixed(1)} GB`;
+        document.getElementById('storage-cost-admin').textContent = `$${(usedGB * 0.005).toFixed(2)}`;
     }
 
     async function deleteUser(userId) {
-        if (!confirm('Are you sure you want to delete this user?')) {
-            return;
-        }
-        
+        if (!confirm('Delete this user?')) return;
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users/${userId}`, {
-                method: 'DELETE',
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/users/${userId}`, { method: 'DELETE', credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
-                showNotification('User deleted successfully', 'success');
+                showNotification('User deleted', 'success');
                 loadUsersTable();
                 refreshAdminData();
             } else {
-                showNotification(data.error || 'Failed to delete user', 'error');
+                showNotification(data.error || 'Failed', 'error');
             }
-        } catch (err) {
-            console.error(err);
-            showNotification('Server error. Please try again later.', 'error');
-        } finally {
-            showLoading(false);
-        }
+        } catch (err) { showNotification('Server error', 'error'); }
+        finally { showLoading(false); }
     }
 
-    // =========== FINANCE FUNCTIONS ===========
     async function loadFinanceData() {
-        console.log('Loading finance data...');
-        const totalTransactions = document.getElementById('total-transactions');
-        const totalRevenue = document.getElementById('total-revenue');
-        const verifiedTransactions = document.getElementById('verified-transactions');
-        const fraudulentTransactions = document.getElementById('fraudulent-transactions');
         const tbody = document.getElementById('transactions-table-body');
-        
         if (!tbody) return;
-        
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions`, {
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions`, { credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
-                const transactions = data.transactions;
-                const stats = data.stats;
-                
-                // Update stats
-                if (totalTransactions) totalTransactions.textContent = stats.total_transactions;
-                if (totalRevenue) totalRevenue.textContent = `KES ${stats.total_revenue}`;
-                if (verifiedTransactions) verifiedTransactions.textContent = stats.verified_transactions;
-                if (fraudulentTransactions) fraudulentTransactions.textContent = stats.fraudulent_transactions;
-                
-                // Update transactions table
+                document.getElementById('total-transactions').textContent = data.stats.total_transactions;
+                document.getElementById('total-revenue').textContent = `KES ${data.stats.total_revenue}`;
+                document.getElementById('verified-transactions').textContent = data.stats.verified_transactions;
+                document.getElementById('fraudulent-transactions').textContent = data.stats.fraudulent_transactions;
                 tbody.innerHTML = '';
-                
-                if (transactions && transactions.length > 0) {
-                    transactions.forEach(transaction => {
-                        const row = document.createElement('tr');
-                        const statusBadge = transaction.status === 'verified' ? 
-                            `<span style="background: rgba(46, 204, 113, 0.2); color: var(--success); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">Verified</span>` :
-                            `<span style="background: rgba(231, 76, 60, 0.2); color: var(--danger); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">Fraudulent</span>`;
-                        
-                        row.innerHTML = `
-                            <td>${transaction.id}</td>
-                            <td>${transaction.user_name || 'N/A'}</td>
-                            <td>${transaction.movie_title || 'N/A'}</td>
-                            <td><code>${transaction.transaction_code}</code></td>
-                            <td style="max-width: 200px; font-size: 0.9rem;">${transaction.mpesa_message.substring(0, 100)}...</td>
-                            <td><strong>KES ${transaction.amount}</strong></td>
-                            <td>${new Date(transaction.created_at).toLocaleDateString()}</td>
-                            <td>${statusBadge}</td>
-                            <td>
-                                <button class="btn btn-info btn-sm view-transaction-btn" data-id="${transaction.id}">
-                                    <i class="fas fa-eye"></i> View
-                                </button>
-                            </td>
-                        `;
-                        tbody.appendChild(row);
+                if (data.transactions?.length) {
+                    data.transactions.forEach(t => {
+                        tbody.innerHTML += `<tr><td>${t.id}</td><td>${t.user_name || 'N/A'}</td><td>${t.movie_title || 'N/A'}</td><td><code>${t.transaction_code}</code></td><td style="max-width:200px;">${t.mpesa_message.substring(0,100)}...</td><td>KES ${t.amount}</td><td>${new Date(t.created_at).toLocaleDateString()}</td><td>${t.status === 'verified' ? '<span style="color:green;">Verified</span>' : '<span style="color:red;">Fraudulent</span>'}</td><td><button class="btn btn-info btn-sm view-transaction-btn" data-id="${t.id}">View</button></td></tr>`;
                     });
-                    
-                    // Add view event listeners
-                    tbody.querySelectorAll('.view-transaction-btn').forEach(btn => {
-                        btn.addEventListener('click', () => {
-                            const transactionId = btn.dataset.id;
-                            viewTransaction(transactionId);
-                        });
-                    });
+                    document.querySelectorAll('.view-transaction-btn').forEach(btn => btn.addEventListener('click', () => viewTransaction(btn.dataset.id)));
                 } else {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="9" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                                <i class="fas fa-money-bill-wave" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                                <h3>No Transactions Found</h3>
-                                <p>No MPesa transactions have been recorded yet</p>
-                            </td>
-                        </tr>
-                    `;
+                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No Transactions</td></tr>';
                 }
-            } else {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="9" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                            <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                            <h3>Failed to Load Transactions</h3>
-                            <p>${data.error || 'Server error'}</p>
-                        </td>
-                    </tr>
-                `;
             }
-        } catch (err) {
-            console.error('Failed to load finance data:', err);
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="9" style="text-align: center; padding: 40px; color: var(--text-gray);">
-                        <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 15px; display: block;"></i>
-                        <h3>Failed to Load Transactions</h3>
-                        <p>${err.message}</p>
-                    </td>
-                </tr>
-            `;
-        } finally {
-            showLoading(false);
-        }
+        } catch (err) { tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">Failed to Load</td></tr>'; }
+        finally { showLoading(false); }
     }
 
-    async function viewTransaction(transactionId) {
+    async function viewTransaction(id) {
         showLoading(true);
-        
         try {
-            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions/${transactionId}`, {
-                credentials: 'include',
-                mode: 'cors'
-            });
-            
+            const response = await fetch(`${SERVER_ENDPOINT}/api/admin/transactions/${id}`, { credentials: 'include' });
             const data = await response.json();
-            
             if (data.success) {
-                const transaction = data.transaction;
-                const transactionDetails = `
-                    <div style="background: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 10px; margin-top: 10px;">
-                        <h3 style="color: var(--primary); margin-bottom: 15px;">Transaction Details</h3>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                            <div>
-                                <strong>Transaction ID:</strong><br>
-                                ${transaction.id}
-                            </div>
-                            <div>
-                                <strong>Date:</strong><br>
-                                ${new Date(transaction.created_at).toLocaleString()}
-                            </div>
-                            <div>
-                                <strong>User:</strong><br>
-                                ${transaction.user_name || 'N/A'}
-                            </div>
-                            <div>
-                                <strong>Movie:</strong><br>
-                                ${transaction.movie_title || 'N/A'}
-                            </div>
-                            <div>
-                                <strong>Transaction Code:</strong><br>
-                                <code>${transaction.transaction_code}</code>
-                            </div>
-                            <div>
-                                <strong>Amount:</strong><br>
-                                KES ${transaction.amount}
-                            </div>
-                            <div>
-                                <strong>Status:</strong><br>
-                                ${transaction.status === 'verified' ? 
-                                    '<span style="color: var(--success); font-weight: bold;">Verified</span>' : 
-                                    '<span style="color: var(--danger); font-weight: bold;">Fraudulent</span>'}
-                            </div>
-                            <div>
-                                <strong>Phone:</strong><br>
-                                ${transaction.phone}
-                            </div>
-                        </div>
-                        <div style="margin-top: 15px;">
-                            <strong>Full MPesa Message:</strong><br>
-                            <textarea style="width: 100%; padding: 10px; margin-top: 5px; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1); color: white; border-radius: 5px; min-height: 100px;" readonly>${transaction.mpesa_message}</textarea>
-                        </div>
-                    </div>
-                `;
-                
-                showNotification(transactionDetails, 'info');
+                alert(`Transaction Details:\nID: ${data.transaction.id}\nUser: ${data.transaction.user_name}\nMovie: ${data.transaction.movie_title}\nCode: ${data.transaction.transaction_code}\nAmount: KES ${data.transaction.amount}\nStatus: ${data.transaction.status}\nPhone: ${data.transaction.phone}\nMessage: ${data.transaction.mpesa_message}`);
             } else {
-                showNotification(data.error || 'Failed to load transaction details', 'error');
+                showNotification('Failed to load details', 'error');
             }
-        } catch (err) {
-            console.error('Failed to view transaction:', err);
-            showNotification('Failed to load transaction details', 'error');
-        } finally {
-            showLoading(false);
-        }
+        } catch (err) { showNotification('Error', 'error'); }
+        finally { showLoading(false); }
     }
 
-    // =========== BACKBLAZE CONNECTION TEST ===========
     async function testBackblazeConnection() {
         showLoading(true);
         try {
             const response = await fetch(`${SERVER_ENDPOINT}/test-backblaze-connection`);
             const data = await response.json();
             const statusEl = document.getElementById('storage-status');
-            
             if (data.success) {
-                if (statusEl) {
-                    statusEl.textContent = 'Active';
-                    statusEl.style.color = '#2ecc71';
-                }
+                if (statusEl) { statusEl.textContent = 'Active'; statusEl.style.color = '#2ecc71'; }
                 showNotification('Backblaze B2 connection successful!', 'success');
             } else {
                 throw new Error(data.error || 'Connection failed');
             }
         } catch (err) {
             const statusEl = document.getElementById('storage-status');
-            if (statusEl) {
-                statusEl.textContent = 'Inactive';
-                statusEl.style.color = '#e74c3c';
-            }
+            if (statusEl) { statusEl.textContent = 'Inactive'; statusEl.style.color = '#e74c3c'; }
             showNotification(`Backblaze connection failed: ${err.message}`, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    // =========== GLOBAL FUNCTION EXPORTS ===========
     window.deleteMovie = deleteMovie;
     window.deleteUser = deleteUser;
     window.testBackblazeConnection = testBackblazeConnection;
@@ -5098,10 +4477,6 @@ UA7QM35P3M Confirmed. Ksh30.00 paid to PETER KINUTHIA NGIGI. on 7/1/26 at 7:05 A
     window.hideVideoPlayer = hideVideoPlayer;
 
     console.log('B/F Cinema Platform Initialization Complete!');
-    console.log('Using server endpoint:', SERVER_ENDPOINT);
-    console.log('Backblaze configuration loaded:', BACKBLAZE_CONFIG);
-    console.log('API credentials loaded:', API_CREDENTIALS);
-    console.log('Plyr player initialized:', player ? 'Yes' : 'No');
     </script>
 </body>
-</html>
+    </html>
