@@ -3646,8 +3646,22 @@ def change_password():
 # =========== STATIC FILE SERVING ===========
 @app.route('/')
 def index():
-    """Serve the main HTML file"""
-    return send_from_directory('.', 'index.html')
+    """Serve the main HTML file or API info if not found"""
+    if os.path.exists('index.html'):
+        return send_from_directory('.', 'index.html')
+    else:
+        return jsonify({
+            'message': 'B/F Cinema API is running',
+            'status': 'healthy',
+            'endpoints': {
+                'api': '/api/movies',
+                'health': '/health',
+                'login': '/api/login',
+                'register': '/save-user',
+                'admin': '/api/admin/stats'
+            },
+            'version': '2.1.0'
+        })
 
 @app.route('/<path:path>')
 def serve_static(path):
@@ -3763,12 +3777,13 @@ if __name__ == '__main__':
     print("="*60 + "\n")
     
     try:
-        port = int(os.getenv('PORT', 5000))
+        # Use PORT environment variable for Render (default 10000) or fallback to 5000
+        port = int(os.getenv('PORT', 10000))
         
         app.run(
-            host='0.0.0.0',
+            host='0.0.0.0',  # MUST bind to 0.0.0.0 for Render
             port=port,
-            debug=not RENDER,
+            debug=False,  # Set to False in production
             threaded=True,
             use_reloader=False
         )
@@ -3776,3 +3791,5 @@ if __name__ == '__main__':
         print("\n👋 Server stopped")
     except Exception as e:
         print(f"\n❌ Error starting server: {str(e)}")
+        import traceback
+        traceback.print_exc()
