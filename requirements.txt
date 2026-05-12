@@ -6,3 +6,8 @@ requests==2.31.0
 segno==1.5.2
 Werkzeug==2.3.7
 schedule==1.2.0
+python-dotenv==1.0.0
+PyJWT==2.8.0
+qrcode==7.4.2
+Pillow==10.1.0
+gunicorn==21.2.0
