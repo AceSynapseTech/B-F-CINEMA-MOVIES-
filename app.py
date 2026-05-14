@@ -30,34 +30,42 @@ try:
 except ImportError:
     QR_AVAILABLE = False
 
-# =========== DATABASE & STORAGE PATHS ===========
+# =========== DATABASE & STORAGE PATHS - FIXED FOR RENDER ===========
 def get_persistent_path(filename):
     """Get persistent path that survives server restarts"""
     if os.getenv('RENDER', 'false').lower() == 'true':
-        data_dir = '/data'
+        # On Render, use a subdirectory in the current working directory
+        # This directory is writable
+        data_dir = os.path.join(os.getcwd(), 'bfcinema_data')
         os.makedirs(data_dir, exist_ok=True)
         return os.path.join(data_dir, filename)
     else:
+        # Local development
         return filename
 
 def get_db_path():
+    """Get persistent database path - CRITICAL FIX"""
     return get_persistent_path('bfcinema.db')
 
 def get_upload_dir():
+    """Get persistent upload directory - CRITICAL FIX"""
     upload_dir = get_persistent_path('uploads')
     os.makedirs(upload_dir, exist_ok=True)
     return upload_dir
 
 def get_temp_dir():
+    """Get persistent temp directory - CRITICAL FIX"""
     temp_dir = get_persistent_path('temp_uploads')
     os.makedirs(temp_dir, exist_ok=True)
     return temp_dir
 
+# Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
+# =========== RENDER-SPECIFIC CONFIGURATIONS ===========
 RENDER = os.getenv('RENDER', 'false').lower() == 'true'
 
 app.secret_key = os.getenv('SECRET_KEY', 'bfcinema_secret_key_2026_secure_12345_prod_change_me')
@@ -111,6 +119,7 @@ BACKBLAZE_CONFIG = {
     'endpoint': os.getenv('BACKBLAZE_ENDPOINT', 'https://s3.eu-central-003.backblazeb2.com')
 }
 
+# Initialize Backblaze B2 S3 client
 s3_client = None
 try:
     s3_client = boto3.client(
@@ -126,7 +135,7 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to initialize Backblaze B2 S3 client: {str(e)}")
 
-# =========== DATABASE INITIALIZATION (No STK Push tables) ===========
+# =========== DATABASE INITIALIZATION ===========
 def init_db():
     try:
         db_path = get_db_path()
@@ -179,7 +188,7 @@ def init_db():
             )
         """)
         
-        # Transactions table (simplified - no STK Push columns)
+        # Transactions table (simplified)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,6 +311,7 @@ print("="*60)
 print("🎬 B/F Cinema - Starting Database Initialization")
 print("="*60)
 
+# Create necessary directories
 os.makedirs(get_upload_dir(), exist_ok=True)
 os.makedirs(get_temp_dir(), exist_ok=True)
 
@@ -560,10 +570,10 @@ def before_request():
         response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH')
         return response, 200
 
-# =========== UPDATED: PAYMENT VERIFICATION ENDPOINT (No STK Push) ===========
+# =========== PAYMENT VERIFICATION ENDPOINT ===========
 @app.route('/api/movies/<int:movie_id>/verify-payment', methods=['POST'])
 def verify_payment(movie_id):
-    """Simple payment verification - user just confirms they paid via payment link"""
+    """Simple payment verification - user confirms they paid via payment link"""
     conn = None
     cursor = None
     try:
@@ -571,10 +581,6 @@ def verify_payment(movie_id):
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
         data = request.get_json()
-        
-        # Simple confirmation - no complex MPesa parsing
-        # User just confirms they completed payment via the payment link
-        phone = data.get('phone', '').strip()
         confirm_payment = data.get('confirm_payment', False)
         
         if not confirm_payment:
@@ -595,7 +601,7 @@ def verify_payment(movie_id):
         if has_movie_access(session['user_id'], movie_id):
             return jsonify({'success': False, 'error': 'You already have access to this movie'}), 400
         
-        # Generate simple transaction code
+        # Generate transaction code
         transaction_code = f"LIP{datetime.now().strftime('%Y%m%d%H%M%S')}{session['user_id']}{movie_id}"
         
         # Create transaction record
@@ -607,7 +613,7 @@ def verify_payment(movie_id):
             transaction_code,
             session['user_id'],
             session['email'],
-            phone if phone else session.get('email', ''),
+            session.get('email', ''),
             movie_id,
             movie_dict['title'],
             movie_dict.get('price', 30.00),
@@ -623,7 +629,7 @@ def verify_payment(movie_id):
             VALUES (?, ?, ?, 1)
         ''', (session['user_id'], movie_id, transaction_id))
         
-        # Add movie to downloads automatically
+        # Add movie to downloads
         video_url = generate_presigned_url(movie_dict['video_key'])
         poster_url = generate_presigned_url(movie_dict.get('poster_key'))
         
@@ -649,7 +655,7 @@ def verify_payment(movie_id):
         
         conn.commit()
         
-        # Generate receipt
+        # Generate receipt QR
         qr_code = generate_receipt_qr(f"""
         B/F Cinema Receipt
         Transaction: {transaction_code}
@@ -664,7 +670,7 @@ def verify_payment(movie_id):
             'transaction_code': transaction_code,
             'user_name': session['name'],
             'user_email': session['email'],
-            'user_phone': phone if phone else session.get('email', ''),
+            'user_phone': session.get('email', ''),
             'movie_title': movie_dict['title'],
             'amount': float(movie_dict.get('price', 30.00)),
             'date': datetime.now().strftime('%d/%m/%y'),
@@ -679,8 +685,7 @@ def verify_payment(movie_id):
         log_activity(session['user_id'], session['email'], 'payment_successful_via_link', {
             'movie_id': movie_id,
             'transaction_code': transaction_code,
-            'amount': float(movie_dict.get('price', 30.00)),
-            'added_to_downloads': True
+            'amount': float(movie_dict.get('price', 30.00))
         })
         
         return jsonify({
@@ -877,7 +882,8 @@ def stream_video_direct(movie_id):
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
         
         if not has_movie_access(session['user_id'], movie_id):
-            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403        
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
+        
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute('SELECT video_key, title, s3_url, is_active FROM movies WHERE id = ?', (movie_id,))
@@ -1236,6 +1242,53 @@ def watch_movie(movie_id):
     except Exception as e:
         logger.error(f"Watch movie error: {str(e)}")
         return jsonify({'success': False, 'error': 'Failed to record view'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/movies/<int:movie_id>/download', methods=['POST'])
+def download_movie(movie_id):
+    conn = None
+    cursor = None
+    try:
+        if 'user_id' not in session or session['user_id'] == 'admin_001':
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        if not has_movie_access(session['user_id'], movie_id):
+            return jsonify({'success': False, 'error': 'Access denied. Purchase required.'}), 403
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT is_active FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        if not movie or not movie['is_active']:
+            return jsonify({'success': False, 'error': 'This movie has expired and been removed from the system'}), 410
+        cursor.execute('SELECT * FROM movies WHERE id = ?', (movie_id,))
+        movie = cursor.fetchone()
+        if not movie:
+            return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        movie_dict = row_to_dict(movie)
+        cursor.execute('UPDATE movies SET download_count = download_count + 1 WHERE id = ?', (movie_id,))
+        cursor.execute('UPDATE users SET downloads = downloads + 1 WHERE id = ?', (session['user_id'],))
+        video_url = generate_presigned_url(movie_dict['video_key'])
+        poster_url = generate_presigned_url(movie_dict.get('poster_key'))
+        movie_data = json.dumps({
+            'id': movie_dict['id'],
+            'title': movie_dict['title'],
+            'description': movie_dict.get('description', ''),
+            'poster': poster_url,
+            'year': movie_dict.get('year'),
+            'url': video_url,
+            'views': movie_dict.get('views', 0),
+            'downloads': movie_dict.get('download_count', 0)
+        })
+        cursor.execute('INSERT INTO downloads (user_id, movie_id, movie_data) VALUES (?, ?, ?)', (session['user_id'], movie_id, movie_data))
+        conn.commit()
+        log_activity(session['user_id'], session['email'], 'download_movie', {'movie_id': movie_id, 'title': movie_dict['title']})
+        return jsonify({'success': True, 'message': 'Download recorded'})
+    except Exception as e:
+        logger.error(f"Download movie error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Failed to record download'}), 500
     finally:
         if cursor:
             cursor.close()
@@ -1640,6 +1693,8 @@ if __name__ == '__main__':
     print(f"📁 Environment: {'PRODUCTION' if RENDER else 'DEVELOPMENT'}")
     print(f"📁 Database: {get_db_path()}")
     print(f"📁 Database size: {os.path.getsize(get_db_path()) if os.path.exists(get_db_path()) else 0} bytes")
+    print(f"📁 Uploads: {get_upload_dir()}")
+    print(f"📁 Temp: {get_temp_dir()}")
     print(f"☁️  Backblaze B2: {'✅ Connected' if s3_client else '❌ Not Connected'}")
     print(f"💰 Payment: ✅ Payment Link Only (No STK Push)")
     print(f"🔗 Payment URL: https://lipana.dev/pay/bf-cinema-movies")
@@ -1653,6 +1708,10 @@ if __name__ == '__main__':
     
     if RENDER:
         print("🌐 Production server on Render")
+        print("📋 Login Credentials:")
+        print("   Admin:")
+        print(f"   • Email: BFCM2026@GMAIL.COM")
+        print("   • Password: [Set in Render environment variables]")
     else:
         print("🌐 Development server available at:")
         print("   • http://localhost:5000")
